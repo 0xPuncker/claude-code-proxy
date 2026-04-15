@@ -113,7 +113,14 @@ export class ClaudeCodeProxy {
       req.on("data", (chunk: Buffer) => chunks.push(chunk));
       req.on("end", async () => {
         try {
-          await this.handleRequest(Buffer.concat(chunks).toString(), { ...req.headers }, req.url || "", req.method || "GET", res);
+          // Convert headers to Record<string, string> format
+          const headers: Record<string, string> = {};
+          for (const [key, value] of Object.entries(req.headers)) {
+            if (value) {
+              headers[key] = Array.isArray(value) ? value[0] : value;
+            }
+          }
+          await this.handleRequest(Buffer.concat(chunks).toString(), headers, req.url || "", req.method || "GET", res);
         } catch (err) {
           this.handleError(err, res);
         }
@@ -240,11 +247,12 @@ export class ClaudeCodeProxy {
   ): Promise<HttpResponse> {
     // Try Z.AI first
     const zaiUrl = `${this.config.zai.baseUrl}${reqPath}`;
-    const zaiHeaders = {
+    const zaiHeaders: Record<string, string> = {
       ...reqHeaders,
       host: new URL(this.config.zai.baseUrl).host,
       authorization: `Bearer ${this.config.zai.apiKey}`,
     };
+    // Remove hop-by-hop headers
     delete zaiHeaders["transfer-encoding"];
     delete zaiHeaders["connection"];
 
@@ -306,11 +314,12 @@ export class ClaudeCodeProxy {
   ): Promise<void> {
     // Try Z.AI first
     const zaiUrl = `${this.config.zai.baseUrl}${reqPath}`;
-    const zaiHeaders = {
+    const zaiHeaders: Record<string, string> = {
       ...reqHeaders,
       host: new URL(this.config.zai.baseUrl).host,
       authorization: `Bearer ${this.config.zai.apiKey}`,
     };
+    // Remove hop-by-hop headers
     delete zaiHeaders["transfer-encoding"];
     delete zaiHeaders["connection"];
 
