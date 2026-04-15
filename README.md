@@ -16,7 +16,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/raulneiva/claude-code-proxy.git
+git clone https://github.com/0xPuncker/claude-code-proxy.git
 cd claude-code-proxy
 
 # Install dependencies
@@ -31,7 +31,17 @@ npm start
 
 ## Quick Start
 
+### Using npm
+
 ```bash
+# Clone the repository
+git clone https://github.com/0xPuncker/claude-code-proxy.git
+cd claude-code-proxy
+
+# Install dependencies and build
+npm install
+npm run build
+
 # Set your API keys
 export ZAI_API_KEY="your-zai-api-key"
 export ANTHROPIC_API_KEY="your-anthropic-api-key"
@@ -41,6 +51,55 @@ npm start
 
 # Or use a custom port
 PROXY_PORT=8080 npm start
+```
+
+### Using Docker
+
+```bash
+# Clone the repository
+git clone https://github.com/0xPuncker/claude-code-proxy.git
+cd claude-code-proxy
+
+# Create environment file from example
+cp .env.docker.example .env
+
+# Edit .env and add your API keys
+# nano .env or code .env
+
+# Build and run with Docker Compose
+make docker-build
+make docker-run
+
+# Or using docker-compose directly
+docker-compose up -d
+
+# View logs
+make docker-logs
+
+# Stop the container
+make docker-stop
+```
+
+#### Docker Commands
+
+```bash
+# Build the Docker image
+docker-compose build
+
+# Start the container
+docker-compose up -d
+
+# View logs
+docker-compose logs -f claude-code-proxy
+
+# Stop the container
+docker-compose down
+
+# Restart the container
+docker-compose restart
+
+# Remove containers and images
+make docker-clean
 ```
 
 ## Usage
@@ -191,6 +250,15 @@ npm run lint
 
 # Format code
 npm run format
+
+# Using Makefile
+make build          # Build TypeScript
+make dev            # Run in development mode
+make test           # Run tests
+make docker-build   # Build Docker image
+make docker-run     # Run Docker container
+make docker-stop    # Stop Docker containers
+make help           # Show all available commands
 ```
 
 ## Architecture
