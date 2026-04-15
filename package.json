@@ -1,0 +1,50 @@
+{
+  "name": "claude-code-proxy",
+  "version": "1.0.0",
+  "description": "Intelligent API proxy for Anthropic Claude with automatic failover and model mapping",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js",
+    "watch": "tsc --watch",
+    "test": "node --test tests/**/*.test.js",
+    "lint": "eslint src/**/*.ts",
+    "format": "prettier --write src/**/*.ts"
+  },
+  "keywords": [
+    "anthropic",
+    "claude",
+    "api",
+    "proxy",
+    "failover",
+    "ai",
+    "llm"
+  ],
+  "author": "Raul Neiva",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/raulneiva/claude-code-proxy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/raulneiva/claude-code-proxy/issues"
+  },
+  "homepage": "https://github.com/raulneiva/claude-code-proxy#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3",
+    "eslint": "^8.56.0",
+    "prettier": "^3.2.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
+}
