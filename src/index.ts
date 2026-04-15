@@ -247,14 +247,17 @@ export class ClaudeCodeProxy {
   ): Promise<HttpResponse> {
     // Try Z.AI first
     const zaiUrl = `${this.config.zai.baseUrl}${reqPath}`;
+    // Build headers without original authorization to avoid conflicts
     const zaiHeaders: Record<string, string> = {
-      ...reqHeaders,
       host: new URL(this.config.zai.baseUrl).host,
       authorization: `Bearer ${this.config.zai.apiKey}`,
     };
-    // Remove hop-by-hop headers
-    delete zaiHeaders["transfer-encoding"];
-    delete zaiHeaders["connection"];
+    // Copy allowed headers
+    for (const [key, value] of Object.entries(reqHeaders)) {
+      if (!["authorization", "transfer-encoding", "connection", "host"].includes(key)) {
+        zaiHeaders[key] = value;
+      }
+    }
 
     this.logger.info(`→ Z.AI ${reqMethod} ${reqPath}`);
 
@@ -314,14 +317,17 @@ export class ClaudeCodeProxy {
   ): Promise<void> {
     // Try Z.AI first
     const zaiUrl = `${this.config.zai.baseUrl}${reqPath}`;
+    // Build headers without original authorization to avoid conflicts
     const zaiHeaders: Record<string, string> = {
-      ...reqHeaders,
       host: new URL(this.config.zai.baseUrl).host,
       authorization: `Bearer ${this.config.zai.apiKey}`,
     };
-    // Remove hop-by-hop headers
-    delete zaiHeaders["transfer-encoding"];
-    delete zaiHeaders["connection"];
+    // Copy allowed headers
+    for (const [key, value] of Object.entries(reqHeaders)) {
+      if (!["authorization", "transfer-encoding", "connection", "host"].includes(key)) {
+        zaiHeaders[key] = value;
+      }
+    }
 
     this.logger.info(`→ Z.AI (stream) ${reqMethod} ${reqPath}`);
 
@@ -390,6 +396,29 @@ export class ClaudeCodeProxy {
     reqMethod: string,
     clientRes: ServerResponse
   ): Promise<void> {
+    // Health check endpoint
+    if (reqPath === "/health" && reqMethod === "GET") {
+      clientRes.writeHead(200, { "Content-Type": "application/json" });
+      clientRes.end(JSON.stringify({
+        status: "healthy",
+        service: "Claude Code Proxy",
+        version: "1.0.0",
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+        endpoints: {
+          health: "/health",
+          proxy: "/v1/messages"
+        },
+        config: {
+          primary: "Z.AI",
+          fallback: "Anthropic",
+          port: this.config.port,
+          models: Object.keys(this.config.modelFallbackMap).length
+        }
+      }));
+      return;
+    }
+
     let isStreaming = false;
     try {
       isStreaming = JSON.parse(reqBody).stream === true;
@@ -416,6 +445,7 @@ export class ClaudeCodeProxy {
       this.logger.ok(`Claude Code Proxy listening on http://localhost:${port}`);
       this.logger.info(`Primary: Z.AI | Fallback: Anthropic`);
       this.logger.info(`Model mappings: ${Object.keys(this.config.modelFallbackMap).length} models configured`);
+      this.logger.info(`Health check available at http://localhost:${port}/health`);
     });
   }
 
