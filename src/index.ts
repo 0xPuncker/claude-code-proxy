@@ -2,7 +2,8 @@
 import http from "node:http";
 import https from "node:https";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { ProxyConfig, RequestOptions, HttpResponse, LogLevel } from "./types.js";
+import { ProxyConfig, RequestOptions, HttpResponse, LogLevel, RequestMetrics } from "./types.js";
+import { UsageTracker } from "./database/tracker.js";
 
 /**
  * Default configuration for the proxy server
@@ -29,6 +30,17 @@ const DEFAULT_CONFIG: ProxyConfig = {
   },
   fallbackOnCodes: [429, 503, 502],
   logLevel: "info",
+  database: process.env.DATABASE_URL ? {
+    host: process.env.DB_HOST || "localhost",
+    port: parseInt(process.env.DB_PORT || "5432", 10),
+    database: process.env.DB_NAME || "claude_proxy",
+    user: process.env.DB_USER || "postgres",
+    password: process.env.DB_PASSWORD || "postgres",
+    ssl: process.env.DB_SSL === "true",
+    maxConnections: parseInt(process.env.DB_MAX_CONNECTIONS || "10", 10),
+    idleTimeoutMs: parseInt(process.env.DB_IDLE_TIMEOUT_MS || "30000", 10),
+    connectionTimeoutMs: parseInt(process.env.DB_CONNECTION_TIMEOUT_MS || "2000", 10),
+  } : undefined,
 };
 
 /**
@@ -90,10 +102,12 @@ export class ClaudeCodeProxy {
   private config: ProxyConfig;
   private logger: Logger;
   private server: http.Server;
+  private usageTracker: UsageTracker;
 
   constructor(config: Partial<ProxyConfig> = {}) {
     this.config = this.mergeConfig(config);
     this.logger = new Logger(this.config.logLevel);
+    this.usageTracker = new UsageTracker(this.config.database);
     this.server = this.createServer();
   }
 
@@ -104,6 +118,7 @@ export class ClaudeCodeProxy {
       zai: { ...DEFAULT_CONFIG.zai, ...config.zai },
       anthropic: { ...DEFAULT_CONFIG.anthropic, ...config.anthropic },
       modelFallbackMap: { ...DEFAULT_CONFIG.modelFallbackMap, ...config.modelFallbackMap },
+      database: config.database || DEFAULT_CONFIG.database,
     };
   }
 
@@ -170,6 +185,18 @@ export class ClaudeCodeProxy {
    */
   private mapModel(model: string): string {
     return this.config.modelFallbackMap[model] || model;
+  }
+
+  /**
+   * Extract model from request body
+   */
+  private extractModel(bodyStr: string): string | undefined {
+    try {
+      const body = JSON.parse(bodyStr);
+      return body.model as string;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -245,6 +272,11 @@ export class ClaudeCodeProxy {
     reqPath: string,
     reqMethod: string
   ): Promise<HttpResponse> {
+    const startTime = Date.now();
+    const model = this.extractModel(reqBody);
+    let fallback = false;
+    let provider: 'zai' | 'anthropic' = 'zai';
+
     // Try Z.AI first
     const zaiUrl = `${this.config.zai.baseUrl}${reqPath}`;
     // Build headers without original authorization to avoid conflicts
@@ -270,6 +302,10 @@ export class ClaudeCodeProxy {
 
       if (!this.config.fallbackOnCodes.includes(zaiRes.status)) {
         this.logger.ok(`← Z.AI ${zaiRes.status}`);
+        
+        // Track the request
+        await this.trackRequestMetrics(reqMethod, reqPath, startTime, zaiRes.status, false, provider, model, false, zaiRes.body);
+        
         return zaiRes;
       }
 
@@ -284,6 +320,9 @@ export class ClaudeCodeProxy {
     }
 
     // Fallback to Anthropic
+    fallback = true;
+    provider = 'anthropic';
+    
     const cleanedPath = this.cleanPath(reqPath);
     const cleanedBody = this.cleanBody(reqBody);
     const cleanedHeaders = this.cleanHeaders(reqHeaders);
@@ -302,6 +341,9 @@ export class ClaudeCodeProxy {
       this.logger.ok(`← Anthropic ${res.status}`);
     }
 
+    // Track the request
+    await this.trackRequestMetrics(reqMethod, reqPath, startTime, res.status, fallback, provider, model, false, res.body);
+
     return res;
   }
 
@@ -315,6 +357,12 @@ export class ClaudeCodeProxy {
     reqMethod: string,
     clientRes: ServerResponse
   ): Promise<void> {
+    const startTime = Date.now();
+    const model = this.extractModel(reqBody);
+    let fallback = false;
+    let provider: 'zai' | 'anthropic' = 'zai';
+    const streamingChunks: string[] = [];
+
     // Try Z.AI first
     const zaiUrl = `${this.config.zai.baseUrl}${reqPath}`;
     // Build headers without original authorization to avoid conflicts
@@ -344,7 +392,19 @@ export class ClaudeCodeProxy {
       if (!this.config.fallbackOnCodes.includes(zaiRes.statusCode!)) {
         this.logger.ok(`← Z.AI (stream) ${zaiRes.statusCode}`);
         clientRes.writeHead(zaiRes.statusCode!, zaiRes.headers);
-        zaiRes.pipe(clientRes);
+        
+        // Collect streaming chunks for token usage extraction
+        zaiRes.on('data', (chunk) => {
+          streamingChunks.push(chunk.toString());
+          clientRes.write(chunk);
+        });
+        
+        zaiRes.on('end', async () => {
+          clientRes.end();
+          // Track the streaming request
+          await this.trackStreamingRequestMetrics(reqMethod, reqPath, startTime, zaiRes.statusCode!, false, provider, model, streamingChunks);
+        });
+        
         return;
       }
 
@@ -355,6 +415,9 @@ export class ClaudeCodeProxy {
     }
 
     // Fallback to Anthropic
+    fallback = true;
+    provider = 'anthropic';
+    
     const cleanedPath = this.cleanPath(reqPath);
     const cleanedBody = this.cleanBody(reqBody);
     const cleanedHeaders = this.cleanHeaders(reqHeaders);
@@ -382,8 +445,98 @@ export class ClaudeCodeProxy {
     } else {
       this.logger.ok(`← Anthropic (stream) ${aRes.statusCode}`);
       clientRes.writeHead(aRes.statusCode!, aRes.headers);
-      aRes.pipe(clientRes);
+      
+      // Collect streaming chunks for token usage extraction
+      aRes.on('data', (chunk) => {
+        streamingChunks.push(chunk.toString());
+        clientRes.write(chunk);
+      });
+      
+      aRes.on('end', async () => {
+        clientRes.end();
+        // Track the streaming request
+        await this.trackStreamingRequestMetrics(reqMethod, reqPath, startTime, aRes.statusCode!, fallback, provider, model, streamingChunks);
+      });
     }
+  }
+
+  /**
+   * Track request metrics for non-streaming requests
+   */
+  private async trackRequestMetrics(
+    method: string,
+    path: string,
+    startTime: number,
+    statusCode: number,
+    fallback: boolean,
+    provider: 'zai' | 'anthropic',
+    model: string | undefined,
+    success: boolean,
+    responseBody: Buffer
+  ): Promise<void> {
+    if (!this.usageTracker.isTrackingEnabled()) return;
+
+    const endTime = Date.now();
+    const duration = endTime - startTime;
+    const errorMessage = success ? undefined : `HTTP ${statusCode}`;
+
+    // Extract token usage from response
+    const tokenUsage = UsageTracker.extractTokenUsage(responseBody.toString());
+
+    const metrics: RequestMetrics = {
+      startTime,
+      endTime,
+      duration,
+      provider,
+      fallback,
+      model,
+      statusCode,
+      streaming: false,
+      success: statusCode < 400,
+      errorMessage,
+      tokenUsage: tokenUsage || undefined,
+    };
+
+    await this.usageTracker.trackRequest(method, path, metrics);
+  }
+
+  /**
+   * Track streaming request metrics
+   */
+  private async trackStreamingRequestMetrics(
+    method: string,
+    path: string,
+    startTime: number,
+    statusCode: number,
+    fallback: boolean,
+    provider: 'zai' | 'anthropic',
+    model: string | undefined,
+    chunks: string[]
+  ): Promise<void> {
+    if (!this.usageTracker.isTrackingEnabled()) return;
+
+    const endTime = Date.now();
+    const duration = endTime - startTime;
+    const errorMessage = statusCode >= 400 ? `HTTP ${statusCode}` : undefined;
+
+    // Extract token usage from streaming response
+    const tokenUsage = UsageTracker.extractStreamingTokenUsage(chunks);
+
+    const metrics: RequestMetrics = {
+      startTime,
+      endTime,
+      duration,
+      provider,
+      fallback,
+      model,
+      statusCode,
+      streaming: true,
+      success: statusCode < 400,
+      errorMessage,
+      tokenUsage: tokenUsage || undefined,
+    };
+
+    await this.usageTracker.trackRequest(method, path, metrics);
   }
 
   /**
@@ -407,15 +560,23 @@ export class ClaudeCodeProxy {
         timestamp: new Date().toISOString(),
         endpoints: {
           health: "/health",
-          proxy: "/v1/messages"
+          proxy: "/v1/messages",
+          usage: "/usage"
         },
         config: {
           primary: "Z.AI",
           fallback: "Anthropic",
           port: this.config.port,
-          models: Object.keys(this.config.modelFallbackMap).length
+          models: Object.keys(this.config.modelFallbackMap).length,
+          tracking: this.usageTracker.isTrackingEnabled()
         }
       }));
+      return;
+    }
+
+    // Usage statistics endpoint
+    if (reqPath === "/usage" && reqMethod === "GET") {
+      await this.handleUsageRequest(clientRes);
       return;
     }
 
@@ -437,22 +598,68 @@ export class ClaudeCodeProxy {
   }
 
   /**
+   * Handle usage statistics request
+   */
+  private async handleUsageRequest(clientRes: ServerResponse): Promise<void> {
+    try {
+      const url = new URL(clientRes.req?.url || '', `http://localhost:${this.config.port}`);
+      const days = parseInt(url.searchParams.get('days') || '7', 10);
+      const limit = parseInt(url.searchParams.get('limit') || '100', 10);
+      
+      const [dailyUsage, recentRequests] = await Promise.all([
+        this.usageTracker.getDailyUsage(days),
+        this.usageTracker.getRecentRequests(limit, 0)
+      ]);
+
+      clientRes.writeHead(200, { "Content-Type": "application/json" });
+      clientRes.end(JSON.stringify({
+        daily_usage: dailyUsage,
+        recent_requests: recentRequests,
+        tracking_enabled: this.usageTracker.isTrackingEnabled(),
+        generated_at: new Date().toISOString()
+      }));
+    } catch (error) {
+      clientRes.writeHead(500, { "Content-Type": "application/json" });
+      clientRes.end(JSON.stringify({
+        error: error instanceof Error ? error.message : "Unknown error"
+      }));
+    }
+  }
+
+  /**
    * Start the proxy server
    */
-  public start(): void {
+  public async start(): Promise<void> {
     const port = this.config.port;
+    
+    // Initialize database if tracking is enabled
+    if (this.usageTracker.isTrackingEnabled()) {
+      try {
+        await this.usageTracker.initialize();
+        this.logger.ok("Database tracking initialized");
+      } catch (error) {
+        this.logger.error("Failed to initialize database tracking");
+        this.logger.error("Continuing without database tracking...");
+      }
+    }
+
     this.server.listen(port, () => {
       this.logger.ok(`Claude Code Proxy listening on http://localhost:${port}`);
       this.logger.info(`Primary: Z.AI | Fallback: Anthropic`);
       this.logger.info(`Model mappings: ${Object.keys(this.config.modelFallbackMap).length} models configured`);
       this.logger.info(`Health check available at http://localhost:${port}/health`);
+      this.logger.info(`Usage stats available at http://localhost:${port}/usage`);
+      if (this.usageTracker.isTrackingEnabled()) {
+        this.logger.ok(`Request tracking enabled with PostgreSQL`);
+      }
     });
   }
 
   /**
    * Stop the proxy server
    */
-  public stop(): void {
+  public async stop(): Promise<void> {
+    await this.usageTracker.close();
     this.server.close(() => {
       this.logger.info("Server stopped");
     });
@@ -462,5 +669,8 @@ export class ClaudeCodeProxy {
 // Start server if run directly
 if (import.meta.url === `file://${process.argv[1]}`) {
   const proxy = new ClaudeCodeProxy();
-  proxy.start();
+  proxy.start().catch(error => {
+    console.error("Failed to start server:", error);
+    process.exit(1);
+  });
 }
