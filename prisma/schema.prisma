@@ -1,0 +1,73 @@
+// Prisma Schema for Claude Code Proxy Usage Tracking
+// Database: PostgreSQL
+// Generated at: 2026-04-16
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Request tracking model
+model Request {
+  id            Int          @id @default(autoincrement())
+  timestamp     DateTime     @default(now()) @db.Timestamptz()
+  method        String       @db.VarChar(10)
+  path          String       @db.VarChar(255)
+  model         String?      @db.VarChar(100)
+  provider      String       @db.VarChar(50)
+  statusCode    Int          @map("status_code")
+  durationMs    Int?         @map("duration_ms") @db.Integer
+  streaming     Boolean      @default(false)
+  fallback      Boolean      @default(false)
+  errorMessage  String?      @map("error_message") @db.Text
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz()
+  
+  tokenUsage    TokenUsage[]
+  
+  @@index([timestamp(sort: Desc)], map: "idx_requests_timestamp")
+  @@index([provider], map: "idx_requests_provider")
+  @@index([model], map: "idx_requests_model")
+  @@index([statusCode], map: "idx_requests_status")
+  @@map("requests")
+}
+
+// Token usage model
+model TokenUsage {
+  id                  Int      @id @default(autoincrement())
+  requestId           Int      @map("request_id")
+  inputTokens         Int      @map("input_tokens")
+  outputTokens        Int      @map("output_tokens")
+  cacheCreationTokens Int      @default(0) @map("cache_creation_tokens")
+  cacheReadTokens     Int      @default(0) @map("cache_read_tokens")
+  totalTokens         Int      @map("total_tokens")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  
+  request             Request  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  
+  @@index([requestId], map: "idx_token_usage_request_id")
+  @@map("token_usage")
+}
+
+// Daily usage aggregation model
+model DailyUsage {
+  id                       Int      @id @default(autoincrement())
+  date                     DateTime @db.Date
+  model                    String
+  provider                 String
+  totalRequests            Int      @default(0) @map("total_requests")
+  totalInputTokens         Int      @default(0) @map("total_input_tokens")
+  totalOutputTokens        Int      @default(0) @map("total_output_tokens")
+  totalCacheReadTokens     Int      @default(0) @map("total_cache_read_tokens")
+  totalCacheCreationTokens Int      @default(0) @map("total_cache_creation_tokens")
+  totalTokens              Int      @default(0) @map("total_tokens")
+  totalDurationMs          BigInt   @default(0) @map("total_duration_ms")
+  updatedAt                DateTime @default(now()) @map("updated_at") @db.Timestamptz()
+  
+  @@unique([date, model, provider], map: "daily_usage_date_model_provider_key")
+  @@index([date(sort: Desc)], map: "idx_daily_usage_date")
+  @@index([model, provider], map: "idx_daily_usage_model")
+  @@map("daily_usage")
+}
