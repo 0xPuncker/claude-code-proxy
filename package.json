@@ -5,13 +5,19 @@
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && prisma generate",
     "start": "node dist/index.js",
-    "dev": "tsc && node dist/index.js",
+    "dev": "tsc && prisma generate && node dist/index.js",
     "watch": "tsc --watch",
     "test": "node --test tests/**/*.test.js",
     "lint": "eslint src/**/*.ts",
     "format": "prettier --write src/**/*.ts",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:migrate:reset": "prisma migrate reset",
+    "prisma:studio": "prisma studio",
+    "prisma:seed": "prisma db seed",
     "db:migrate": "node dist/database/migrate.js",
     "db:seed": "node dist/database/seed.js"
   },
@@ -22,7 +28,9 @@
     "proxy",
     "failover",
     "ai",
-    "llm"
+    "llm",
+    "usage-tracking",
+    "prisma"
   ],
   "author": "Raul Neiva",
   "license": "MIT",
@@ -38,17 +46,24 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@prisma/client": "^7.7.0",
     "pg": "^8.11.3"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/pg": "^8.10.9",
-    "typescript": "^5.3.3",
     "eslint": "^8.56.0",
-    "prettier": "^3.2.0"
+    "prettier": "^3.2.0",
+    "prisma": "^7.7.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
   },
   "files": [
     "dist",
+    "prisma",
     "README.md",
     "LICENSE"
   ]
