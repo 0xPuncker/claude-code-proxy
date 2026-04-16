@@ -25,8 +25,13 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
+    - name: Set up DATABASE_URL for Prisma
+      run: echo "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/test_db" >> $GITHUB_ENV
+
     - name: Build project
       run: npm run build
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
 
     - name: Run tests
       run: npm test
@@ -52,8 +57,13 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
+    - name: Set up DATABASE_URL for Prisma
+      run: echo "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/test_db" >> $GITHUB_ENV
+
     - name: Build project
       run: npm run build
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
 
     - name: Create Release
       uses: actions/create-release@v1
