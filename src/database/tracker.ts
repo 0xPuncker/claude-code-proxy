@@ -93,7 +93,7 @@ export class UsageTracker {
 
         CREATE TABLE IF NOT EXISTS daily_usage (
           id SERIAL PRIMARY KEY,
-          date DATE NOT NULL UNIQUE,
+          date DATE NOT NULL,
           model VARCHAR(100) NOT NULL,
           provider VARCHAR(50) NOT NULL,
           total_requests INTEGER DEFAULT 0,
@@ -103,7 +103,8 @@ export class UsageTracker {
           total_cache_creation_tokens INTEGER DEFAULT 0,
           total_tokens INTEGER DEFAULT 0,
           total_duration_ms BIGINT DEFAULT 0,
-          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          UNIQUE(date, model, provider)
         );
 
         CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp);
@@ -117,9 +118,50 @@ export class UsageTracker {
 
       await this.pool.query(schema);
       console.log('✅ Database tables initialized successfully');
+
+      // Fix existing daily_usage table if it has old schema
+      await this.fixDailyUsageSchema();
     } catch (error) {
       console.error('❌ Failed to initialize database tables:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Fix daily_usage table schema for existing databases
+   * Changes UNIQUE(date) to UNIQUE(date, model, provider)
+   */
+  private async fixDailyUsageSchema(): Promise<void> {
+    try {
+      // Check if the table has the old schema (UNIQUE constraint on date only)
+      const checkQuery = `
+        SELECT COUNT(*) as count
+        FROM information_schema.table_constraints
+        WHERE table_name = 'daily_usage'
+        AND constraint_type = 'UNIQUE'
+        AND constraint_name = 'daily_usage_date_key';
+      `;
+
+      const result = await this.pool.query(checkQuery);
+
+      if (result.rows[0].count > 0) {
+        console.log('🔧 Fixing daily_usage table schema...');
+
+        // Drop the old unique constraint on date only
+        await this.pool.query(`ALTER TABLE daily_usage DROP CONSTRAINT daily_usage_date_key;`);
+
+        // Add the correct unique constraint on (date, model, provider)
+        await this.pool.query(`
+          ALTER TABLE daily_usage
+          ADD CONSTRAINT daily_usage_date_model_provider_key
+          UNIQUE(date, model, provider);
+        `);
+
+        console.log('✅ daily_usage table schema fixed successfully');
+      }
+    } catch (error) {
+      // If the fix fails, it might be because the table is already correct or doesn't exist
+      console.log('ℹ️ Schema fix skipped (table may already be correct)');
     }
   }
 
