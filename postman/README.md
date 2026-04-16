@@ -18,12 +18,21 @@ This collection provides comprehensive API testing capabilities for:
 
 1. Open Postman
 2. Click "Import" in the top left
-3. Select `Claude-Code-Proxy-Collection.json`
+3. Drag and drop `Claude-Code-Proxy-Collection.json` or select "Upload Files"
 4. Click "Import" to add the collection
 
-### 2. Configure Environment
+### 2. Import Environment (Optional)
 
-Create a new environment with these variables:
+1. Click "Manage Environments" (gear icon in top right)
+2. Click "Import"
+3. Select `claude-code-proxy-environment.json`
+4. This will create a pre-configured environment with all necessary variables
+
+### 3. Configure Environment
+
+**Quick Setup:**
+
+Create a new environment or edit the imported one with these variables:
 
 ```json
 {
@@ -31,6 +40,14 @@ Create a new environment with these variables:
   "apiKey": "your-api-key-here"
 }
 ```
+
+**For local development:**
+- `baseUrl`: `http://localhost:4181`
+- `apiKey`: Your Anthropic API key (get from https://console.anthropic.com)
+
+**For Docker deployment:**
+- `baseUrl`: `http://localhost:4181` (if using default port mapping)
+- `apiKey`: Your Anthropic API key
 
 **For local development:**
 - `baseUrl`: `http://localhost:4181`
