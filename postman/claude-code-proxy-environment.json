@@ -1,0 +1,43 @@
+{
+  "id": "local-dev-environment",
+  "name": "Claude Code Proxy - Local Dev",
+  "values": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:4181",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "claudeApiKey",
+      "value": "",
+      "type": "secret",
+      "enabled": false
+    },
+    {
+      "key": "timeout",
+      "value": "30000",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "maxTokens",
+      "value": "4096",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "temperature",
+      "value": "0.7",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "model",
+      "value": "claude-sonnet-4-20250514",
+      "type": "default",
+      "enabled": true
+    }
+  ],
+  "_postman_variable_scope": "environment"
+}
