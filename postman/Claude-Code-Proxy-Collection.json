@@ -32,240 +32,10 @@
               "path": ["health"]
             },
             "description": "Check proxy health status and configuration"
-          },
-          "response": [
-            {
-              "name": "Success Response",
-              "originalRequest": {
-                "method": "GET",
-                "header": [],
-                "url": {
-                  "raw": "{{baseUrl}}/health",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["health"]
-                }
-              },
-              "status": "OK",
-              "code": 200,
-              "_postman_previewlanguage": "json",
-              "header": [
-                {
-                  "key": "Content-Type",
-                  "value": "application/json"
-                }
-              ],
-              "body": "{\n  \"status\": \"healthy\",\n  \"service\": \"Claude Code Proxy\",\n  \"version\": \"1.0.0\",\n  \"uptime\": 1234.56,\n  \"timestamp\": \"2026-04-16T10:30:00.000Z\",\n  \"endpoints\": {\n    \"health\": \"/health\",\n    \"proxy\": \"/v1/messages\",\n    \"usage\": \"/usage\"\n  },\n  \"config\": {\n    \"primary\": \"Z.AI\",\n    \"fallback\": \"Anthropic\",\n    \"port\": 4181,\n    \"models\": 8,\n    \"tracking\": true\n  }\n}"
-            }
-          ]
-        }
-      ]
-    },
+          }
+        },
         {
           "name": "Usage Statistics",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/usage?days=7&limit=100",
-              "host": ["{{baseUrl}}"],
-              "path": ["usage"],
-              "query": [
-                {
-                  "key": "days",
-                  "value": "7",
-                  "description": "Number of days to include in statistics"
-                },
-                {
-                  "key": "limit",
-                  "value": "100",
-                  "description": "Maximum number of recent requests to return"
-                }
-              ]
-            },
-            "description": "Get comprehensive usage statistics and recent requests"
-          },
-          "response": [
-            {
-              "name": "Success Response",
-              "originalRequest": {
-                "method": "GET",
-                "header": [],
-                "url": {
-                  "raw": "{{baseUrl}}/usage?days=7&limit=100",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["usage"],
-                  "query": [
-                    {
-                      "key": "days",
-                      "value": "7"
-                    },
-                    {
-                      "key": "limit",
-                      "value": "100"
-                    }
-                  ]
-                }
-              },
-              "status": "OK",
-              "code": 200,
-              "_postman_previewlanguage": "json",
-              "header": [
-                {
-                  "key": "Content-Type",
-                  "value": "application/json"
-                }
-              ],
-              "body": "{\n  \"daily_usage\": [\n    {\n      \"id\": 1,\n      \"date\": \"2026-04-16\",\n      \"model\": \"claude-sonnet-4-20250514\",\n      \"provider\": \"zai\",\n      \"total_requests\": 150,\n      \"total_input_tokens\": 125000,\n      \"total_output_tokens\": 89000,\n      \"total_cache_read_tokens\": 5000,\n      \"total_cache_creation_tokens\": 2000,\n      \"total_tokens\": 221000,\n      \"total_duration_ms\": 45600000\n    }\n  ],\n  \"recent_requests\": [\n    {\n      \"id\": 1,\n      \"timestamp\": \"2026-04-16T10:30:00.000Z\",\n      \"method\": \"POST\",\n      \"path\": \"/v1/messages\",\n      \"model\": \"claude-sonnet-4-20250514\",\n      \"provider\": \"zai\",\n      \"status_code\": 200,\n      \"duration_ms\": 1250,\n      \"streaming\": true,\n      \"fallback\": false,\n      \"error_message\": null\n    }\n  ],\n  \"tracking_enabled\": true,\n  \"generated_at\": \"2026-04-16T10:30:00.000Z\"\n}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "Proxy Operations",
-      "item": [
-        {
-          "name": "Create Message (Non-Streaming)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "anthropic-version",
-                "value": "2023-06-01"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 1024,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Hello, Claude! Can you help me write a simple function in TypeScript?\"\n    }\n  ]\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/v1/messages",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "messages"]
-            },
-            "description": "Send a message to Claude API (non-streaming)"
-          },
-          "response": []
-        },
-        {
-          "name": "Create Message (Streaming)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "anthropic-version",
-                "value": "2023-06-01"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 1024,\n  \"stream\": true,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Hello! Tell me a short joke about programming.\"\n    }\n  ]\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/v1/messages",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "messages"]
-            },
-            "description": "Send a streaming message to Claude API"
-          },
-          "response": []
-        },
-        {
-          "name": "Create Message with System Prompt",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "anthropic-version",
-                "value": "2023-06-01"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 2048,\n  \"system\": \"You are a helpful coding assistant specializing in TypeScript and Node.js development.\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"How do I properly handle errors in async/await functions?\"\n    }\n  ]\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/v1/messages",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "messages"]
-            },
-            "description": "Send a message with custom system prompt"
-          },
-          "response": []
-        },
-        {
-          "name": "Create Message with Temperature",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "anthropic-version",
-                "value": "2023-06-01"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 1024,\n  \"temperature\": 0.7,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write a creative story about a robot learning to code.\"\n    }\n  ]\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/v1/messages",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "messages"]
-            },
-            "description": "Send a message with custom temperature for more creative responses"
-          },
-          "response": []
-        },
-        {
-          "name": "Multi-turn Conversation",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "anthropic-version",
-                "value": "2023-06-01"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 1024,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"What is Node.js?\"\n    },\n    {\n      \"role\": \"assistant\",\n      \"content\": \"Node.js is a JavaScript runtime built on Chrome's V8 engine...\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Can you give me a simple example?\"\n    }\n  ]\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/v1/messages",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "messages"]
-            },
-            "description": "Send a multi-turn conversation with conversation history"
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "Usage Analytics",
-      "item": [
-        {
-          "name": "Last 7 Days Usage",
           "request": {
             "method": "GET",
             "header": [],
@@ -281,11 +51,301 @@
               ]
             },
             "description": "Get usage statistics for the last 7 days"
-          },
-          "response": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "Messages API",
+      "item": [
+        {
+          "name": "Create Message (Streaming)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 1024,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Hello, Claude!\"\n    }\n  ],\n  \"stream\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "messages"]
+            },
+            "description": "Create a streaming message request"
+          }
         },
         {
-          "name": "Last 30 Days Usage",
+          "name": "Create Message (Non-Streaming)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 1024,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Explain quantum computing in simple terms.\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "messages"]
+            },
+            "description": "Create a non-streaming message request"
+          }
+        },
+        {
+          "name": "Create Message with System Prompt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 1024,\n  \"system\": \"You are a helpful assistant that explains complex topics simply.\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Explain machine learning.\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "messages"]
+            },
+            "description": "Create a message with system prompt"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Models & Testing",
+      "item": [
+        {
+          "name": "List Models",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/models",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "models"]
+            },
+            "description": "List available models"
+          }
+        },
+        {
+          "name": "Test with Claude Sonnet 4.6",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 512,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"What is 2+2?\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "messages"]
+            },
+            "description": "Test basic request with Claude Sonnet 4.6"
+          }
+        },
+        {
+          "name": "Test with Claude Opus 4.6",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"claude-opus-4-6\",\n  \"max_tokens\": 512,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write a haiku about coding.\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "messages"]
+            },
+            "description": "Test request with Claude Opus 4.6"
+          }
+        },
+        {
+          "name": "Test with Claude Haiku 4.5",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"claude-haiku-4-5\",\n  \"max_tokens\": 256,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Say hello in 5 languages.\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "messages"]
+            },
+            "description": "Test request with Claude Haiku 4.5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Advanced Features",
+      "item": [
+        {
+          "name": "Multi-turn Conversation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 1024,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Remember the number 42.\"\n    },\n    {\n      \"role\": \"assistant\",\n      \"content\": \"I'll remember that number is 42.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"What number did I ask you to remember?\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "messages"]
+            },
+            "description": "Test multi-turn conversation with context"
+          }
+        },
+        {
+          "name": "Long Context Request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 4096,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write a detailed explanation of how the internet works, including DNS, TCP/IP, and HTTP protocols.\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "messages"]
+            },
+            "description": "Test with longer context and higher max tokens"
+          }
+        },
+        {
+          "name": "Error Handling Test",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-api-key",
+                "value": "invalid-key"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 256,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"This should fail with invalid API key.\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "messages"]
+            },
+            "description": "Test error handling with invalid API key"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Usage Tracking",
+      "item": [
+        {
+          "name": "Get Daily Usage (7 days)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/usage?days=7",
+              "host": ["{{baseUrl}}"],
+              "path": ["usage"],
+              "query": [
+                {
+                  "key": "days",
+                  "value": "7"
+                }
+              ]
+            },
+            "description": "Get usage statistics for the last 7 days"
+          }
+        },
+        {
+          "name": "Get Daily Usage (30 days)",
           "request": {
             "method": "GET",
             "header": [],
@@ -301,220 +361,26 @@
               ]
             },
             "description": "Get usage statistics for the last 30 days"
-          },
-          "response": []
+          }
         },
         {
-          "name": "Recent 50 Requests",
+          "name": "Get Recent Requests",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/usage?limit=50",
+              "raw": "{{baseUrl}}/usage/recent?limit=10",
               "host": ["{{baseUrl}}"],
-              "path": ["usage"],
+              "path": ["usage", "recent"],
               "query": [
                 {
                   "key": "limit",
-                  "value": "50"
+                  "value": "10"
                 }
               ]
             },
-            "description": "Get the 50 most recent requests"
-          },
-          "response": []
-        },
-        {
-          "name": "Custom Usage Query",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/usage?days=14&limit=200",
-              "host": ["{{baseUrl}}"],
-              "path": ["usage"],
-              "query": [
-                {
-                  "key": "days",
-                  "value": "14"
-                },
-                {
-                  "key": "limit",
-                  "value": "200"
-                }
-              ]
-            },
-            "description": "Get custom usage statistics with 14 days and 200 recent requests"
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "Model Testing",
-      "item": [
-        {
-          "name": "Test with Sonnet 4",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "anthropic-version",
-                "value": "2023-06-01"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 512,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"What is 2+2?\"\n    }\n  ]\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/v1/messages",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "messages"]
-            },
-            "description": "Test request with Claude Sonnet 4"
-          },
-          "response": []
-        },
-        {
-          "name": "Test with Opus 4",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "anthropic-version",
-                "value": "2023-06-01"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"model\": \"claude-opus-4-6\",\n  \"max_tokens\": 512,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Explain quantum computing in simple terms.\"\n    }\n  ]\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/v1/messages",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "messages"]
-            },
-            "description": "Test request with Claude Opus 4 (will be mapped to Sonnet)"
-          },
-          "response": []
-        },
-        {
-          "name": "Test with Haiku 4",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "anthropic-version",
-                "value": "2023-06-01"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"model\": \"claude-haiku-4-5\",\n  \"max_tokens\": 256,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"What is the capital of France?\"\n    }\n  ]\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/v1/messages",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "messages"]
-            },
-            "description": "Test request with Claude Haiku (fastest model)"
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "Error Scenarios",
-      "item": [
-        {
-          "name": "Invalid Model Name",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "anthropic-version",
-                "value": "2023-06-01"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"model\": \"invalid-model-name\",\n  \"max_tokens\": 256,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Test message\"\n    }\n  ]\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/v1/messages",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "messages"]
-            },
-            "description": "Test error handling with invalid model name"
-          },
-          "response": []
-        },
-        {
-          "name": "Missing Required Fields",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "anthropic-version",
-                "value": "2023-06-01"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"messages\": []\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/v1/messages",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "messages"]
-            },
-            "description": "Test error handling with empty messages array"
-          },
-          "response": []
-        },
-        {
-          "name": "Malformed JSON Request",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{ invalid json }"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/v1/messages",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "messages"]
-            },
-            "description": "Test error handling with malformed JSON"
-          },
-          "response": []
+            "description": "Get the 10 most recent requests"
+          }
         }
       ]
     }
