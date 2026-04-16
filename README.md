@@ -55,51 +55,127 @@ PROXY_PORT=8080 npm start
 
 ### Using Docker
 
+#### Quick Start with .env File
+
 ```bash
 # Clone the repository
 git clone https://github.com/0xPuncker/claude-code-proxy.git
 cd claude-code-proxy
 
-# Create environment file from example
-cp .env.docker.example .env
+# Create environment file from Docker example
+cp .env.docker.example .env.docker
 
-# Edit .env and add your API keys
-# nano .env or code .env
+# Edit .env.docker and add your API keys
+# nano .env.docker or code .env.docker
 
-# Build and run with Docker Compose
-make docker-build
-make docker-run
-
-# Or using docker-compose directly
-docker-compose up -d
+# Build and run with Docker Compose using custom env file
+docker-compose --env-file .env.docker up -d
 
 # View logs
-make docker-logs
+docker-compose --env-file .env.docker logs -f cc-proxy
 
 # Stop the container
-make docker-stop
+docker-compose --env-file .env.docker down
 ```
+
+#### Docker Environment Files
+
+The proxy supports multiple environment file patterns:
+
+- **`.env.docker.example`**: Comprehensive Docker environment template with all available configuration options
+- **`.env.example`**: Basic environment template for local development
+- **`.env.docker`**: Your custom Docker environment (not tracked in git)
 
 #### Docker Commands
 
 ```bash
+# Using default .env file
+docker-compose up -d
+
+# Using custom environment file
+docker-compose --env-file .env.docker up -d
+
+# Using specific environment file
+docker-compose --env-file .env.production up -d
+
 # Build the Docker image
 docker-compose build
 
 # Start the container
 docker-compose up -d
 
-# View logs
-docker-compose logs -f claude-code-proxy
+# View logs for specific service
+docker-compose logs -f cc-proxy
+docker-compose logs -f cc-db
+docker-compose logs -f cc-adminer
+
+# View all logs
+docker-compose logs -f
 
 # Stop the container
 docker-compose down
 
+# Stop and remove volumes
+docker-compose down -v
+
 # Restart the container
-docker-compose restart
+docker-compose restart cc-proxy
 
 # Remove containers and images
-make docker-clean
+docker-compose down --rmi all -v
+```
+
+#### Environment Variables Reference
+
+Key Docker environment variables (see `.env.docker.example` for complete list):
+
+```bash
+# Required
+ZAI_API_KEY=your-zai-api-key-here
+ANTHROPIC_API_KEY=your-anthropic-api-key-here
+
+# Optional (with defaults)
+PROXY_PORT=4181                    # Proxy server port
+POSTGRES_VERSION=15                # PostgreSQL version
+POSTGRES_DB=claude_proxy          # Database name
+POSTGRES_USER=postgres            # Database user
+POSTGRES_PASSWORD=postgres        # Database password
+ADMINER_PORT=8080                  # Adminer UI port
+LOG_LEVEL=info                     # Logging level
+NODE_ENV=production                # Node environment
+RESTART_POLICY=unless-stopped      # Container restart policy
+```
+
+#### Docker Services
+
+The docker-compose setup includes three services:
+
+- **cc-proxy**: Main proxy server (port 4181)
+- **cc-db**: PostgreSQL database (port 5432) 
+- **cc-adminer**: Database management UI (port 8080)
+
+#### Database Access
+
+**Via Adminer Web UI:**
+- URL: `http://localhost:8080`
+- System: PostgreSQL
+- Server: `cc-db`
+- Username: `postgres`
+- Password: `postgres`
+- Database: `claude_proxy`
+
+**Via psql command:**
+```bash
+docker-compose exec cc-db psql -U postgres -d claude_proxy
+```
+
+**Database Backup/Restore:**
+```bash
+# Backup
+docker-compose exec cc-db pg_dump -U postgres claude_proxy > backup.sql
+
+# Restore
+docker-compose exec -T cc-db psql -U postgres claude_proxy < backup.sql
 ```
 
 ## Usage
