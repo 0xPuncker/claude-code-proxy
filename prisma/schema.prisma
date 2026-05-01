@@ -8,6 +8,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 // Request tracking model
@@ -24,9 +25,9 @@ model Request {
   fallback      Boolean      @default(false)
   errorMessage  String?      @map("error_message") @db.Text
   createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz()
-  
+
   tokenUsage    TokenUsage[]
-  
+
   @@index([timestamp(sort: Desc)], map: "idx_requests_timestamp")
   @@index([provider], map: "idx_requests_provider")
   @@index([model], map: "idx_requests_model")
@@ -44,9 +45,9 @@ model TokenUsage {
   cacheReadTokens     Int      @default(0) @map("cache_read_tokens")
   totalTokens         Int      @map("total_tokens")
   createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz()
-  
+
   request             Request  @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  
+
   @@index([requestId], map: "idx_token_usage_request_id")
   @@map("token_usage")
 }
@@ -65,7 +66,7 @@ model DailyUsage {
   totalTokens              Int      @default(0) @map("total_tokens")
   totalDurationMs          BigInt   @default(0) @map("total_duration_ms")
   updatedAt                DateTime @default(now()) @map("updated_at") @db.Timestamptz()
-  
+
   @@unique([date, model, provider], map: "daily_usage_date_model_provider_key")
   @@index([date(sort: Desc)], map: "idx_daily_usage_date")
   @@index([model, provider], map: "idx_daily_usage_model")
