@@ -32,7 +32,7 @@ docker-stop: ## Stop Docker containers
 
 docker-clean: ## Remove Docker containers and images
 	docker-compose down -v
-	docker rmi claude-code-proxy_claude-code-proxy
+	docker rmi claude-code-proxy-cc-proxy:latest 2>/dev/null || true
 
 docker-restart: docker-stop docker-run ## Restart Docker containers
 
