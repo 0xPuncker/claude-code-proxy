@@ -25,6 +25,15 @@ export interface ProxyConfig {
     idleTimeoutMs: number;
     connectionTimeoutMs: number;
   };
+  circuitBreaker?: {
+    enabled?: boolean;
+    cooldownMs?: number;
+    degradedThreshold?: number;
+    unavailableThreshold?: number;
+    healthCheckInterval?: number;
+    anthropicWeeklyLimit?: number; // Weekly token limit for Anthropic (0 = no limit)
+    quotaWarningThreshold?: number; // Percentage to trigger fallback (default: 80)
+  };
 }
 
 /**
