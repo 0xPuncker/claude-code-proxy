@@ -21,6 +21,7 @@
     "db:migrate": "node dist/database/migrate.js",
     "db:seed": "node dist/database/seed.js",
     "setup:claude": "node scripts/setup-claude-proxy.js",
+    "setup:docker": "powershell -ExecutionPolicy Bypass -File scripts/setup-docker.ps1",
     "settings:restore": "node scripts/restore-claude-settings.js",
     "settings:backup": "node scripts/backup-claude-settings.js",
     "providers:reset": "curl -s -X POST http://127.0.0.1:4181/providers/reset",
