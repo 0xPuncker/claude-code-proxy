@@ -192,6 +192,58 @@ export class ClaudeCodeProxy {
     }
   }
 
+  private async trySubscriptionRequest(
+    reqBody: string,
+    reqHeaders: Record<string, string>,
+    reqPath: string,
+    reqMethod: string
+  ): Promise<HttpResponse | undefined> {
+    if (!this.config.claudeSubscription.enabled) return undefined;
+
+    const oauthToken = await this.readClaudeOAuthToken();
+    if (!oauthToken) {
+      this.logger.warn("Claude subscription credentials not found or expired — skipping");
+      return undefined;
+    }
+
+    const cleanedPath = this.cleanPath(reqPath);
+    const cleanedBody = this.cleanBody(reqBody);
+
+    const tryRequest = async (token: string) => {
+      const subHeaders = this.buildSubscriptionHeaders(reqHeaders, token);
+      subHeaders["content-length"] = Buffer.byteLength(cleanedBody).toString();
+      return this.httpRequest(
+        `${this.config.claudeSubscription.baseUrl}${cleanedPath}`,
+        { method: reqMethod, headers: subHeaders, body: cleanedBody }
+      );
+    };
+
+    this.logger.info(`→ Claude subscription ${reqMethod} ${cleanedPath}`);
+    try {
+      let subRes = await tryRequest(oauthToken);
+
+      if (subRes.status === 401) {
+        this.logger.warn("← Claude subscription 401 — re-reading credentials and retrying");
+        const freshToken = await this.readClaudeOAuthToken();
+        if (freshToken && freshToken !== oauthToken) subRes = await tryRequest(freshToken);
+      }
+
+      if (!this.config.fallbackOnCodes.includes(subRes.status)) {
+        if (subRes.status >= 400) {
+          this.logger.error(`← Claude subscription ${subRes.status}: ${subRes.body.toString().slice(0, 300)}`);
+        } else {
+          this.logger.ok(`← Claude subscription ${subRes.status}`);
+        }
+        return subRes;
+      }
+      this.logger.warn(`← Claude subscription ${subRes.status} — trying next provider`);
+      return undefined;
+    } catch (err) {
+      this.logger.error(`← Claude subscription error: ${err instanceof Error ? err.message : "Unknown"} — fallback`);
+      return undefined;
+    }
+  }
+
   private buildSubscriptionHeaders(reqHeaders: Record<string, string>, token: string): Record<string, string> {
     const cleaned: Record<string, string> = {};
     const allowed = ["content-type", "accept", "anthropic-version", "anthropic-beta", "user-agent"];
@@ -518,20 +570,19 @@ export class ClaudeCodeProxy {
         return response;
       }
 
-      this.logger.warn(`← Z.AI ${zaiRes.status} — fallback to Claude subscription`);
-      try {
-        this.logger.debug(`  ${zaiRes.body.toString().slice(0, 200)}`);
-      } catch {
-        // Ignore debug logging errors
-      }
-
       const reason = errorType === 'context_window' ? "context window limit" :
                      errorType === 'rate_limit' ? "rate limit" :
                      `HTTP ${response.status}`;
+      this.logger.warn(`← ${primaryProvider.toUpperCase()} ${reason} — trying subscription`);
 
-      this.logger.warn(`← ${primaryProvider.toUpperCase()} ${reason} — fallback`);
+      // Try Claude subscription before the other API provider
+      const subResult = await this.trySubscriptionRequest(reqBody, reqHeaders, reqPath, reqMethod);
+      if (subResult) {
+        await this.trackRequestMetrics(reqMethod, reqPath, startTime, subResult.status, true, 'anthropic', model, false, subResult.body);
+        return subResult;
+      }
 
-      // Try fallback provider
+      // Try the other provider (zai ↔ anthropic)
       const fallbackProvider = primaryProvider === 'zai' ? 'anthropic' : 'zai';
       this.logger.info(`→ ${fallbackProvider.toUpperCase()} ${reqMethod} ${reqPath}`);
 
@@ -576,7 +627,13 @@ export class ClaudeCodeProxy {
         this.providerHealth.recordFailure(primaryProvider, 'other');
       }
 
-      this.logger.error(`← ${primaryProvider.toUpperCase()} error: ${err instanceof Error ? err.message : "Unknown"} — fallback`);
+      this.logger.error(`← ${primaryProvider.toUpperCase()} error: ${err instanceof Error ? err.message : "Unknown"} — trying subscription`);
+
+      const subResult = await this.trySubscriptionRequest(reqBody, reqHeaders, reqPath, reqMethod);
+      if (subResult) {
+        await this.trackRequestMetrics(reqMethod, reqPath, startTime, subResult.status, true, 'anthropic', model, false, subResult.body);
+        return subResult;
+      }
 
       const fallbackProvider = primaryProvider === 'zai' ? 'anthropic' : 'zai';
       this.logger.info(`→ ${fallbackProvider.toUpperCase()} ${reqMethod} ${reqPath}`);
@@ -625,82 +682,6 @@ export class ClaudeCodeProxy {
       }
     }
 
-    // Fallback 1: Claude subscription (OAuth)
-    fallback = true;
-    const cleanedPath = this.cleanPath(reqPath);
-    const cleanedBody = this.cleanBody(reqBody);
-
-    if (this.config.claudeSubscription.enabled) {
-      const oauthToken = await this.readClaudeOAuthToken();
-      if (oauthToken) {
-        const trySubscription = async (token: string) => {
-          const subHeaders = this.buildSubscriptionHeaders(reqHeaders, token);
-          subHeaders["content-length"] = Buffer.byteLength(cleanedBody).toString();
-          return this.httpRequest(
-            `${this.config.claudeSubscription.baseUrl}${cleanedPath}`,
-            { method: reqMethod, headers: subHeaders, body: cleanedBody }
-          );
-        };
-
-        this.logger.info(`→ Claude subscription ${reqMethod} ${cleanedPath}`);
-        try {
-          let subRes = await trySubscription(oauthToken);
-
-          // On 401, token may have just been refreshed — re-read and retry once
-          if (subRes.status === 401) {
-            this.logger.warn("← Claude subscription 401 — re-reading credentials and retrying");
-            const freshToken = await this.readClaudeOAuthToken();
-            if (freshToken && freshToken !== oauthToken) {
-              subRes = await trySubscription(freshToken);
-            }
-          }
-
-          if (!this.config.fallbackOnCodes.includes(subRes.status)) {
-            if (subRes.status >= 400) {
-              this.logger.error(`← Claude subscription ${subRes.status}: ${subRes.body.toString().slice(0, 300)}`);
-            } else {
-              this.logger.ok(`← Claude subscription ${subRes.status}`);
-            }
-            await this.trackRequestMetrics(reqMethod, reqPath, startTime, subRes.status, fallback, 'anthropic', model, false, subRes.body);
-            return subRes;
-          }
-          this.logger.warn(`← Claude subscription ${subRes.status} — fallback to Anthropic API`);
-        } catch (err) {
-          this.logger.error(`← Claude subscription error: ${err instanceof Error ? err.message : "Unknown"} — fallback`);
-        }
-      } else {
-        this.logger.warn("Claude subscription credentials not found or expired — skipping");
-      }
-    }
-
-    // Fallback 2: Anthropic API (direct, if key configured)
-    if (!this.config.anthropic.apiKey) {
-      this.logger.error("No Anthropic API key configured — all fallbacks exhausted");
-      const emptyBuf = Buffer.from(JSON.stringify({ error: { message: "All providers failed or unavailable" } }));
-      await this.trackRequestMetrics(reqMethod, reqPath, startTime, 503, fallback, 'anthropic', model, false, emptyBuf);
-      return { status: 503, headers: { "content-type": "application/json" }, body: emptyBuf };
-    }
-
-    provider = 'anthropic';
-    const cleanedHeaders = this.cleanHeaders(reqHeaders);
-    cleanedHeaders["content-length"] = Buffer.byteLength(cleanedBody).toString();
-
-    this.logger.info(`→ Anthropic ${reqMethod} ${cleanedPath}`);
-
-    const res = await this.httpRequest(
-      `${this.config.anthropic.baseUrl}${cleanedPath}`,
-      { method: reqMethod, headers: cleanedHeaders, body: cleanedBody }
-    );
-
-    if (res.status >= 400) {
-      this.logger.error(`← Anthropic ${res.status}: ${res.body.toString().slice(0, 300)}`);
-    } else {
-      this.logger.ok(`← Anthropic ${res.status}`);
-    }
-
-    await this.trackRequestMetrics(reqMethod, reqPath, startTime, res.status, fallback, provider, model, false, res.body);
-
-    return res;
   }
 
   /**
@@ -807,8 +788,7 @@ export class ClaudeCodeProxy {
       return;
     }
 
-    // Fallback 1: Claude subscription (OAuth, streaming)
-    fallback = true;
+    // Primary failed — try Claude subscription (streaming)
     const cleanedPath = this.cleanPath(reqPath);
     const cleanedBody = this.cleanBody(reqBody);
 
@@ -831,14 +811,11 @@ export class ClaudeCodeProxy {
         try {
           let subRes = await trySubscriptionStream(oauthToken);
 
-          // On 401, re-read credentials and retry once
           if (subRes.statusCode === 401) {
             this.logger.warn("← Claude subscription 401 — re-reading credentials and retrying");
             subRes.resume();
             const freshToken = await this.readClaudeOAuthToken();
-            if (freshToken && freshToken !== oauthToken) {
-              subRes = await trySubscriptionStream(freshToken);
-            }
+            if (freshToken && freshToken !== oauthToken) subRes = await trySubscriptionStream(freshToken);
           }
 
           if (!this.config.fallbackOnCodes.includes(subRes.statusCode!)) {
@@ -847,12 +824,12 @@ export class ClaudeCodeProxy {
             subRes.on('data', (chunk) => { streamingChunks.push(chunk.toString()); clientRes.write(chunk); });
             subRes.on('end', async () => {
               clientRes.end();
-              await this.trackStreamingRequestMetrics(reqMethod, reqPath, startTime, subRes.statusCode!, fallback, 'anthropic', model, streamingChunks);
+              await this.trackStreamingRequestMetrics(reqMethod, reqPath, startTime, subRes.statusCode!, true, 'anthropic', model, streamingChunks);
             });
             return;
           }
           subRes.resume();
-          this.logger.warn(`← Claude subscription ${subRes.statusCode} — stream fallback to Anthropic API`);
+          this.logger.warn(`← Claude subscription ${subRes.statusCode} — trying other provider`);
         } catch (err) {
           this.logger.error(`← Claude subscription stream error: ${err instanceof Error ? err.message : "Unknown"}`);
         }
@@ -861,26 +838,15 @@ export class ClaudeCodeProxy {
       }
     }
 
-    // Fallback 2: Anthropic API (direct, streaming)
-    if (!this.config.anthropic.apiKey) {
-      this.logger.error("No Anthropic API key configured — all fallbacks exhausted");
-      clientRes.writeHead(503, { "content-type": "application/json" });
-      clientRes.end(JSON.stringify({ error: { message: "All providers failed or unavailable" } }));
-      return;
-    }
+    // Try the other provider (zai ↔ anthropic)
+    const fallbackProvider = primaryProvider === 'zai' ? 'anthropic' : 'zai';
+    const fallbackResult = await executeStream(fallbackProvider);
+    if (fallbackResult.success) return;
 
-    provider = 'anthropic';
-    const cleanedHeaders = this.cleanHeaders(reqHeaders);
-    cleanedHeaders["content-length"] = Buffer.byteLength(cleanedBody).toString();
-
-    if (!fallbackResult.success) {
-      // Both failed - send error response
-      if (!clientRes.headersSent) {
-        clientRes.writeHead(502, { "Content-Type": "application/json" });
-        clientRes.end(JSON.stringify({
-          error: { message: "Both providers failed" }
-        }));
-      }
+    // All providers failed
+    if (!clientRes.headersSent) {
+      clientRes.writeHead(502, { "Content-Type": "application/json" });
+      clientRes.end(JSON.stringify({ error: { message: "All providers failed" } }));
     }
   }
 
@@ -1132,7 +1098,6 @@ export class ClaudeCodeProxy {
 
     this.server.listen(port, () => {
       this.logger.ok(`Claude Code Proxy listening on http://localhost:${port}`);
-<<<<<<< Updated upstream
       const cbEnabled = this.config.circuitBreaker?.enabled !== false;
       const quotaLimit = this.config.circuitBreaker?.anthropicWeeklyLimit || 0;
       const quotaThreshold = this.config.circuitBreaker?.quotaWarningThreshold || 80;
@@ -1143,12 +1108,8 @@ export class ClaudeCodeProxy {
           this.logger.info(`Anthropic weekly quota: ${quotaLimit} tokens (fallback at ${quotaThreshold}%)`);
         }
         this.logger.info(`Provider health available at http://localhost:${port}/providers`);
-      } else {
-        this.logger.info(`Primary: Anthropic | Fallback: Z.AI (circuit breaker disabled)`);
       }
-=======
-      this.logger.info(`Primary: Z.AI | Fallback 1: ${subStatus} | Fallback 2: ${apiStatus}`);
->>>>>>> Stashed changes
+      this.logger.info(`Subscription fallback: ${subStatus} | Direct API: ${apiStatus}`);
       this.logger.info(`Model mappings: ${Object.keys(this.config.modelFallbackMap).length} models configured`);
       this.logger.info(`Health check available at http://localhost:${port}/health`);
       this.logger.info(`Usage stats available at http://localhost:${port}/usage`);
