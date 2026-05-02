@@ -1,3 +1,5 @@
 export default {
   schema: './prisma/schema.prisma',
-} as const;
+} as const satisfies {
+  schema: string;
+};
