@@ -23,8 +23,8 @@
     "setup:claude": "node scripts/setup-claude-proxy.js",
     "settings:restore": "node scripts/restore-claude-settings.js",
     "settings:backup": "node scripts/backup-claude-settings.js",
-    "providers:reset": "curl -s -X POST http://localhost:4181/providers/reset",
-    "providers:status": "curl -s http://localhost:4181/providers"
+    "providers:reset": "curl -s -X POST http://127.0.0.1:4181/providers/reset",
+    "providers:status": "curl -s http://127.0.0.1:4181/providers"
   },
   "keywords": [
     "anthropic",

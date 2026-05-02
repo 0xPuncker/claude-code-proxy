@@ -23,7 +23,7 @@ This will:
 
 Configure Claude Code to use the proxy.
 
-- **What it does**: Backs up your current settings and adds `ANTHROPIC_API_URL` environment variable pointing to `http://localhost:4181`
+- **What it does**: Backs up your current settings and adds `ANTHROPIC_API_URL` environment variable pointing to `http://127.0.0.1:4181`
 - **When to use**: First-time setup or if you want to reconfigure the proxy
 - **Safety**: Creates a timestamped backup in `~/.claude/backups/` before making changes
 
@@ -49,7 +49,7 @@ Reset all provider health states to healthy.
 
 - **What it does**: Resets the circuit breaker, making all providers available immediately
 - **When to use**: If both providers are in cooldown and you want to force them available
-- **Note**: This is a shortcut for `curl -s -X POST http://localhost:4181/providers/reset`
+- **Note**: This is a shortcut for `curl -s -X POST http://127.0.0.1:4181/providers/reset`
 
 ### `npm run providers:status`
 
@@ -57,7 +57,7 @@ Check the current status of all providers.
 
 - **What it does**: Shows health state and cooldown status for each provider
 - **When to use**: Monitor which providers are available and their current state
-- **Note**: This is a shortcut for `curl -s http://localhost:4181/providers`
+- **Note**: This is a shortcut for `curl -s http://127.0.0.1:4181/providers`
 
 ## How It Works
 
@@ -80,7 +80,7 @@ If you prefer to configure Claude Code manually, edit `~/.claude/settings.json`:
 ```json
 {
   "env": {
-    "ANTHROPIC_API_URL": "http://localhost:4181"
+    "ANTHROPIC_API_URL": "http://127.0.0.1:4181"
   }
 }
 ```
@@ -93,7 +93,7 @@ Then restart Claude Code.
 
 1. Check that `~/.claude/settings.json` contains the proxy URL
 2. Restart Claude Code completely (not just the terminal)
-3. Verify the proxy is running: `curl http://localhost:4181/health`
+3. Verify the proxy is running: `curl http://127.0.0.1:4181/health`
 
 ### Both providers show as unavailable
 
@@ -127,7 +127,7 @@ cp ~/.claude/backups/settings.json.backup.YYYY-MM-DD_HHMMSS ~/.claude/settings.j
 
 ## Security Notes
 
-- The proxy runs on `localhost:4181` and is not exposed to the network
+- The proxy runs on `127.0.0.1:4181` and is not exposed to the network
 - Your API keys are stored in the proxy's `.env` file, not in Claude Code settings
 - The proxy does not store or log any request content beyond usage metrics
 - Backup files may contain sensitive configuration - keep them secure

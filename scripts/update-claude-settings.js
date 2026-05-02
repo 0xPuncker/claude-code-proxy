@@ -13,7 +13,7 @@ const __dirname = path.dirname(__filename);
 
 // Configuration
 const CLAUDE_SETTINGS = path.join(process.env.HOME || process.env.USERPROFILE, '.claude', 'settings.json');
-const CC_PROXY_URL = 'http://localhost:4181';
+const CC_PROXY_URL = 'http://127.0.0.1:4181';
 const BACKUP_DIR = path.join(process.env.HOME || process.env.USERPROFILE, '.claude', 'backups');
 const TIMESTAMP = new Date().toISOString().replace(/[:.]/g, '-').split('T')[0] + '_' +
                    new Date().toTimeString().split(' ')[0].replace(/:/g, '');

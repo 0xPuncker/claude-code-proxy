@@ -67,9 +67,7 @@ function isProxyConfigured(settings) {
   if (!settings) return false;
 
   // Check for various ways the proxy might be configured
-  if (settings.env?.ANTHROPIC_API_URL?.includes('localhost:4181')) return true;
   if (settings.env?.ANTHROPIC_API_URL?.includes('127.0.0.1:4181')) return true;
-  if (settings.apiUrl?.includes('localhost:4181')) return true;
   if (settings.apiUrl?.includes('127.0.0.1:4181')) return true;
 
   return false;
