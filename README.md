@@ -184,7 +184,7 @@ docker-compose exec -T cc-db psql -U postgres claude_proxy < backup.sql
 
 ```javascript
 // Use the proxy with any Claude API client
-const response = await fetch('http://localhost:4181/v1/messages', {
+const response = await fetch('http://127.0.0.1:4181/v1/messages', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
