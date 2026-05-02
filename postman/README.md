@@ -36,24 +36,24 @@ Create a new environment or edit the imported one with these variables:
 
 ```json
 {
-  "baseUrl": "http://localhost:4181",
+  "baseUrl": "http://127.0.0.1:4181",
   "apiKey": "your-api-key-here"
 }
 ```
 
 **For local development:**
-- `baseUrl`: `http://localhost:4181`
+- `baseUrl`: `http://127.0.0.1:4181`
 - `apiKey`: Your Anthropic API key (get from https://console.anthropic.com)
 
 **For Docker deployment:**
-- `baseUrl`: `http://localhost:4181` (if using default port mapping)
+- `baseUrl`: `http://127.0.0.1:4181` (if using default port mapping)
 - `apiKey`: Your Anthropic API key
 
 **For local development:**
-- `baseUrl`: `http://localhost:4181`
+- `baseUrl`: `http://127.0.0.1:4181`
 
 **For Docker deployment:**
-- `baseUrl`: `http://localhost:4181` (if port mapped)
+- `baseUrl`: `http://127.0.0.1:4181` (if port mapped)
 - Use your actual deployment URL
 
 ### 3. Start Testing
@@ -95,7 +95,7 @@ You can now run individual requests or the entire collection!
 
 ```json
 {
-  "baseUrl": "http://localhost:4181",
+  "baseUrl": "http://127.0.0.1:4181",
   "claudeApiKey": "sk-ant-...",
   "timeout": "30000"
 }
@@ -208,7 +208,7 @@ The proxy tracks:
 ### Connection Issues
 
 **Problem**: "Could not get any response"
-- **Solution**: Check if proxy is running: `curl http://localhost:4181/health`
+- **Solution**: Check if proxy is running: `curl http://127.0.0.1:4181/health`
 
 ### Authentication Errors
 

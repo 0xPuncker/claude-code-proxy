@@ -93,7 +93,7 @@ Aggregated daily statistics:
 
 ### Health Check
 ```bash
-curl http://localhost:4181/health
+curl http://127.0.0.1:4181/health
 ```
 
 Response includes tracking status:
@@ -112,16 +112,16 @@ Response includes tracking status:
 ### Usage Statistics
 ```bash
 # Get last 7 days of usage
-curl http://localhost:4181/usage
+curl http://127.0.0.1:4181/usage
 
 # Get last 30 days of usage
-curl http://localhost:4181/usage?days=30
+curl http://127.0.0.1:4181/usage?days=30
 
 # Get last 50 recent requests
-curl http://localhost:4181/usage?limit=50
+curl http://127.0.0.1:4181/usage?limit=50
 
 # Combine parameters
-curl "http://localhost:4181/usage?days=14&limit=200"
+curl "http://127.0.0.1:4181/usage?days=14&limit=200"
 ```
 
 Response format:
