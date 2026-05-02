@@ -20,10 +20,11 @@
     "prisma:seed": "prisma db seed",
     "db:migrate": "node dist/database/migrate.js",
     "db:seed": "node dist/database/seed.js",
-    "settings:update": "node scripts/update-claude-settings.js",
-    "settings:update:bash": "bash scripts/update-claude-settings.sh",
-    "settings:backup": "node -e \"const fs=require('fs');const ts=new Date().toISOString().replace(/[:.]/g,'-').split('T')[0]+'_'+new Date().toTimeString().split(' ')[0].replace(/:/g,'');const bp=fs.existsSync(process.env.HOME?`${process.env.HOME}/.claude`:`${process.env.USERPROFILE}/.claude`)?(process.env.HOME||process.env.USERPROFILE)+`/.claude`:null;if(bp){fs.copyFileSync(`${bp}/settings.json`,`${bp}/settings.json.backup.${ts}`);console.log('✅ Backup created:',`${bp}/settings.json.backup.${ts}`);}else{console.log('❌ .claude directory not found');}\"",
-    "settings:restore": "ls -t ~/.claude/settings.json.backup.* 2>/dev/null || ls -t ~/AppData/Roaming/../.claude/settings.json.backup.* 2>/dev/null | head -1 | xargs -I {} cp {} ~/.claude/settings.json"
+    "setup:claude": "node scripts/setup-claude-proxy.js",
+    "settings:restore": "node scripts/restore-claude-settings.js",
+    "settings:backup": "node scripts/backup-claude-settings.js",
+    "providers:reset": "curl -s -X POST http://127.0.0.1:4181/providers/reset",
+    "providers:status": "curl -s http://127.0.0.1:4181/providers"
   },
   "keywords": [
     "anthropic",
