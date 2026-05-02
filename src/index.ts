@@ -747,6 +747,7 @@ export class ClaudeCodeProxy {
 
     const primaryProvider = selectedProvider;
     const streamingChunks: string[] = [];
+    let headersSent = false;
 
     // Helper to execute streaming request
     const executeStream = async (provider: 'zai' | 'anthropic'): Promise<{ success: boolean; statusCode: number; errorType?: string }> => {
@@ -798,6 +799,7 @@ export class ClaudeCodeProxy {
           if (!clientRes.headersSent) {
             clientRes.writeHead(statusCode, { "Content-Type": "application/json" });
             clientRes.end(errorBody);
+            headersSent = true;
           }
 
           return { success: false, statusCode, errorType };
@@ -805,33 +807,61 @@ export class ClaudeCodeProxy {
 
         // Success - pipe response to client
         this.logger.ok(`← ${provider.toUpperCase()} (stream) ${statusCode}`);
-        clientRes.writeHead(statusCode, res.headers);
+        if (!clientRes.headersSent) {
+          clientRes.writeHead(statusCode, res.headers);
+          headersSent = true;
+        }
 
         res.on('data', (chunk) => {
-          streamingChunks.push(chunk.toString());
-          clientRes.write(chunk);
+          try {
+            streamingChunks.push(chunk.toString());
+            if (!clientRes.headersSent) {
+              headersSent = true;
+            }
+            clientRes.write(chunk);
+          } catch (writeErr) {
+            // Can't write to client - connection might be closed
+            // Log but don't throw to avoid crashing the stream
+            this.logger.debug(`Error writing to client: ${writeErr instanceof Error ? writeErr.message : 'Unknown'}`);
+          }
         });
 
         res.on('end', async () => {
-          clientRes.end();
-          const latency = Date.now() - startTime;
-          if (cbEnabled) {
-            this.providerHealth.recordSuccess(provider, latency);
-            // Record token usage for quota tracking
-            const tokenUsage = UsageTracker.extractStreamingTokenUsage(streamingChunks);
-            if (tokenUsage) {
-              this.providerHealth.recordTokenUsage(provider, tokenUsage.input_tokens, tokenUsage.output_tokens);
+          try {
+            if (!clientRes.headersSent) {
+              headersSent = true;
             }
+            clientRes.end();
+            const latency = Date.now() - startTime;
+            if (cbEnabled) {
+              this.providerHealth.recordSuccess(provider, latency);
+              // Record token usage for quota tracking
+              const tokenUsage = UsageTracker.extractStreamingTokenUsage(streamingChunks);
+              if (tokenUsage) {
+                this.providerHealth.recordTokenUsage(provider, tokenUsage.input_tokens, tokenUsage.output_tokens);
+              }
+            }
+            await this.trackStreamingRequestMetrics(reqMethod, reqPath, startTime, statusCode, false, provider, model, streamingChunks);
+          } catch (endErr) {
+            // Error during end processing - log but don't throw
+            this.logger.debug(`Error in stream end handler: ${endErr instanceof Error ? endErr.message : 'Unknown'}`);
           }
-          await this.trackStreamingRequestMetrics(reqMethod, reqPath, startTime, statusCode, false, provider, model, streamingChunks);
         });
 
         return { success: true, statusCode };
       } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : "Unknown";
         if (cbEnabled) {
           this.providerHealth.recordFailure(provider, 'other');
         }
-        this.logger.error(`← ${provider.toUpperCase()} stream error: ${err instanceof Error ? err.message : "Unknown"}`);
+
+        // If headers were already sent, we can't retry - just log and return success to prevent fallback
+        if (headersSent) {
+          this.logger.error(`← ${provider.toUpperCase()} stream error after headers sent: ${errorMsg}`);
+          return { success: true, statusCode: 200 }; // Return success to prevent fallback retry
+        }
+
+        this.logger.error(`← ${provider.toUpperCase()} stream error: ${errorMsg}`);
         return { success: false, statusCode: 0, errorType: 'network' };
       }
     };
@@ -839,6 +869,12 @@ export class ClaudeCodeProxy {
     // Try primary provider
     const primaryResult = await executeStream(primaryProvider);
     if (primaryResult.success) {
+      return;
+    }
+
+    // If headers were already sent, we can't try fallback providers
+    if (headersSent) {
+      this.logger.debug("Headers already sent to client, cannot retry with fallback providers");
       return;
     }
 
@@ -874,11 +910,25 @@ export class ClaudeCodeProxy {
 
           if (!this.config.fallbackOnCodes.includes(subRes.statusCode!)) {
             this.logger.ok(`← Claude subscription (stream) ${subRes.statusCode}`);
-            clientRes.writeHead(subRes.statusCode!, subRes.headers);
-            subRes.on('data', (chunk) => { streamingChunks.push(chunk.toString()); clientRes.write(chunk); });
+            if (!clientRes.headersSent) {
+              clientRes.writeHead(subRes.statusCode!, subRes.headers);
+              headersSent = true;
+            }
+            subRes.on('data', (chunk) => {
+              try {
+                streamingChunks.push(chunk.toString());
+                clientRes.write(chunk);
+              } catch (writeErr) {
+                this.logger.debug(`Error writing subscription response: ${writeErr instanceof Error ? writeErr.message : 'Unknown'}`);
+              }
+            });
             subRes.on('end', async () => {
-              clientRes.end();
-              await this.trackStreamingRequestMetrics(reqMethod, reqPath, startTime, subRes.statusCode!, true, 'anthropic', model, streamingChunks);
+              try {
+                clientRes.end();
+                await this.trackStreamingRequestMetrics(reqMethod, reqPath, startTime, subRes.statusCode!, true, 'anthropic', model, streamingChunks);
+              } catch (endErr) {
+                this.logger.debug(`Error in subscription end handler: ${endErr instanceof Error ? endErr.message : 'Unknown'}`);
+              }
             });
             return;
           }
@@ -1069,6 +1119,19 @@ export class ClaudeCodeProxy {
           quota: s.quota,
           readyAt: s.readyAt ? new Date(s.readyAt).toISOString() : undefined
         }))
+      }));
+      return;
+    }
+
+    // Reset providers endpoint
+    if (reqPath === "/providers/reset" && reqMethod === "POST") {
+      this.providerHealth.resetAll();
+      this.logger.ok("Provider health has been reset - all providers are now available");
+      clientRes.writeHead(200, { "Content-Type": "application/json" });
+      clientRes.end(JSON.stringify({
+        status: "ok",
+        message: "All providers have been reset to healthy state",
+        providers: ["anthropic", "zai"]
       }));
       return;
     }
