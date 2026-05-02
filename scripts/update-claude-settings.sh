@@ -13,7 +13,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
-CC_PROXY_URL="http://localhost:4181"
+CC_PROXY_URL="http://127.0.0.1:4181"
 BACKUP_DIR="$HOME/.claude/backups"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="$BACKUP_DIR/settings.json.backup.$TIMESTAMP"
