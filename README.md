@@ -55,7 +55,31 @@ PROXY_PORT=8080 npm start
 
 ### Using Docker
 
-#### Quick Start with .env File
+#### Windows Quick Start (Recommended)
+
+The proxy includes a PowerShell setup script that auto-detects your Windows user profile and Claude credentials:
+
+```powershell
+# Clone the repository
+git clone https://github.com/0xPuncker/claude-code-proxy.git
+cd claude-code-proxy
+
+# Run the automatic setup script
+powershell -ExecutionPolicy Bypass -File scripts/setup-docker.ps1
+
+# Start the containers
+docker-compose --env-file .env.docker up -d
+```
+
+The setup script automatically:
+- Detects your Windows user profile directory
+- Converts Windows paths to Docker format
+- Configures Claude subscription credentials mount
+- Generates `.env.docker` with proper configuration
+
+**⚠️ Windows Limitation:** Due to Docker bind mount permissions on Windows, the Claude subscription credentials file (`~/.claude/.credentials.json`) cannot be read from inside the container. The proxy will work fine with Z.AI as your primary provider. To enable a fallback provider, add your Anthropic API key to `.env.docker`.
+
+#### Quick Start with .env File (Linux/Mac)
 
 ```bash
 # Clone the repository

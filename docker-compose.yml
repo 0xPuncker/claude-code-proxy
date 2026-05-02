@@ -11,6 +11,8 @@ services:
       - PROXY_PORT=${PROXY_PORT:-4181}
       - ZAI_API_KEY=${ZAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_SUBSCRIPTION_ENABLED=${CLAUDE_SUBSCRIPTION_ENABLED:-true}
+      - CLAUDE_CREDENTIALS_PATH=/root/.claude/.credentials.json
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@${DB_HOST:-cc-db}:${DB_PORT:-5432}/${POSTGRES_DB:-claude_proxy}
       - DB_HOST=${DB_HOST:-cc-db}
       - DB_PORT=${DB_PORT:-5432}
@@ -23,6 +25,8 @@ services:
       - DB_CONNECTION_TIMEOUT_MS=${DB_CONNECTION_TIMEOUT_MS:-2000}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - NODE_ENV=${NODE_ENV:-production}
+    volumes:
+      - ${CLAUDE_CREDENTIALS_PATH}:/root/.claude/.credentials.json:ro
     depends_on:
       cc-db:
         condition: service_healthy
