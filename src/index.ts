@@ -238,16 +238,56 @@ export class ClaudeCodeProxy {
 
   /**
    * Check if response body contains a context window error
+   * Handles various API error message formats
    */
   private isContextWindowError(body: Buffer): boolean {
     try {
       const bodyStr = body.toString();
+
+      // Try to parse as JSON to check error.message field
+      try {
+        const json = JSON.parse(bodyStr);
+        if (json.error?.message) {
+          const msg = json.error.message.toLowerCase();
+          if (msg.includes("context window") || msg.includes("context limit") ||
+              msg.includes("reached its context") || msg.includes("exceeds context")) {
+            return true;
+          }
+        }
+      } catch {
+        // Not JSON, continue with string checks
+      }
+
+      // Direct string match for the exact error message
       const lower = bodyStr.toLowerCase();
-      return lower.includes("context") && (
-        lower.includes("window") ||
-        lower.includes("limit") ||
-        lower.includes("exceed")
-      );
+
+      // Exact phrase from the error
+      if (lower.includes("reached its context window limit")) {
+        return true;
+      }
+      if (lower.includes("context window limit")) {
+        return true;
+      }
+
+      // Check for various context window error patterns
+      const contextWindowPatterns = [
+        "context window",
+        "context_window",
+        "context-window",
+        "exceeds context",
+        "exceeded context",
+        "too long",
+        "maximum context",
+        "max tokens",
+        "token limit",
+        "input too long",
+        "message too long",
+        "prompt too long",
+        "request too large",
+        "content too long"
+      ];
+
+      return contextWindowPatterns.some(pattern => lower.includes(pattern));
     } catch {
       return false;
     }
@@ -414,6 +454,7 @@ export class ClaudeCodeProxy {
         errorType = 'rate_limit';
       } else if (this.isContextWindowError(response.body)) {
         errorType = 'context_window';
+        this.logger.debug(`  Context window error detected for ${provider}`);
       } else {
         errorType = 'other';
       }
@@ -482,7 +523,15 @@ export class ClaudeCodeProxy {
                      errorType === 'rate_limit' ? "rate limit" :
                      `HTTP ${response.status}`;
 
-      this.logger.warn(`← ${primaryProvider.toUpperCase()} ${reason} — fallback`);
+      if (errorType === 'context_window' || errorType === 'rate_limit') {
+        this.logger.warn(`⚠️ ${primaryProvider.toUpperCase()} ${reason} — switching to fallback provider`);
+      } else {
+        this.logger.warn(`← ${primaryProvider.toUpperCase()} ${reason} — fallback`);
+      }
+
+      if (errorType === 'context_window') {
+        this.logger.debug(`  Error body: ${response.body.toString().slice(0, 300)}`);
+      }
 
       // Try fallback provider
       const fallbackProvider = primaryProvider === 'zai' ? 'anthropic' : 'zai';
@@ -626,12 +675,19 @@ export class ClaudeCodeProxy {
 
         const statusCode = res.statusCode || 200;
 
-        // Check for errors
-        let errorType: string | undefined;
+        // Check for errors - for 4xx/5xx, we need to read the response body first
         if (statusCode >= 400) {
+          // Collect error response body to determine error type
+          const chunks: Buffer[] = [];
+          for await (const chunk of res) {
+            chunks.push(chunk);
+          }
+          const errorBody = Buffer.concat(chunks);
+
+          let errorType: string | undefined;
           if (statusCode === 429) {
             errorType = 'rate_limit';
-          } else if (this.isContextWindowError(Buffer.from(''))) {
+          } else if (this.isContextWindowError(errorBody)) {
             errorType = 'context_window';
           } else {
             errorType = 'other';
@@ -639,6 +695,12 @@ export class ClaudeCodeProxy {
 
           if (cbEnabled && errorType) {
             this.providerHealth.recordFailure(provider, errorType as any, statusCode);
+          }
+
+          // Send error response to client
+          if (!clientRes.headersSent) {
+            clientRes.writeHead(statusCode, { "Content-Type": "application/json" });
+            clientRes.end(errorBody);
           }
 
           return { success: false, statusCode, errorType };

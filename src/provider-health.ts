@@ -352,6 +352,7 @@ export class ProviderHealth {
 
   /**
    * Record a failed request with error type
+   * Context window and rate limit errors trigger immediate cooldown
    */
   recordFailure(provider: 'zai' | 'anthropic', errorType: 'rate_limit' | 'context_window' | 'other', statusCode?: number): void {
     const metrics = this.metrics.get(provider)!;
@@ -369,10 +370,15 @@ export class ProviderHealth {
       metrics.contextWindowErrors++;
     }
 
-    // Update provider state based on consecutive errors
-    if (metrics.consecutiveErrors >= config.unavailableThreshold ||
-        errorType === 'rate_limit' && statusCode === 429) {
-      // Major failure - enter cooldown
+    // IMMEDIATE COOLDOWN for context window or rate limit errors
+    // This prevents cascading failures when many concurrent requests are sent
+    if (errorType === 'context_window' || errorType === 'rate_limit') {
+      this.enterCooldown(provider);
+      return;
+    }
+
+    // For other errors, use threshold-based approach
+    if (metrics.consecutiveErrors >= config.unavailableThreshold) {
       this.enterCooldown(provider);
     } else if (metrics.consecutiveErrors >= config.degradedThreshold) {
       this.state.set(provider, ProviderState.DEGRADED);
