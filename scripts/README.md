@@ -21,7 +21,7 @@ node scripts/update-claude-settings.js
 - ✅ Creates timestamped backup before making changes
 - ✅ Validates JSON structure before and after updates
 - ✅ Removes unnecessary auth tokens (handled by proxy)
-- ✅ Sets correct proxy URL (http://localhost:4181)
+- ✅ Sets correct proxy URL (http://127.0.0.1:4181)
 - ✅ Works on Windows, macOS, and Linux
 
 #### `update-claude-settings.sh` (Alternative)
@@ -49,7 +49,7 @@ npm run settings:restore
 
 1. **Backup**: Creates `~/.claude/backups/settings.json.backup.TIMESTAMP`
 2. **Update**: Modifies `~/.claude/settings.json`:
-   - Sets `ANTHROPIC_BASE_URL` to `http://localhost:4181`
+   - Sets `ANTHROPIC_BASE_URL` to `http://127.0.0.1:4181`
    - Removes `ANTHROPIC_AUTH_TOKEN` (handled by cc-proxy)
 3. **Validate**: Ensures JSON syntax is correct
 4. **Report**: Shows exactly what was changed
@@ -62,7 +62,7 @@ If you prefer to configure manually, update `~/.claude/settings.json`:
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "env": {
-    "ANTHROPIC_BASE_URL": "http://localhost:4181"
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:4181"
     // Remove ANTHROPIC_AUTH_TOKEN if present
   }
 }
@@ -74,13 +74,13 @@ Test your proxy configuration:
 
 ```bash
 # Check proxy health
-curl -s http://localhost:4181/health | jq .
+curl -s http://127.0.0.1:4181/health | jq .
 
 # View usage statistics
-curl -s http://localhost:4181/usage | jq .
+curl -s http://127.0.0.1:4181/usage | jq .
 
 # Check recent API calls
-curl -s http://localhost:4181/api/logs | jq .
+curl -s http://127.0.0.1:4181/api/logs | jq .
 ```
 
 ## Troubleshooting
@@ -147,5 +147,5 @@ npm run db:seed
 For issues or questions:
 1. Check proxy logs: `docker logs cc-proxy`
 2. Verify settings: `cat ~/.claude/settings.json | jq .`
-3. Test proxy: `curl http://localhost:4181/health`
+3. Test proxy: `curl http://127.0.0.1:4181/health`
 4. Check database: `docker logs cc-db`

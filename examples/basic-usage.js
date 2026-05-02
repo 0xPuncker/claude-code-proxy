@@ -13,7 +13,7 @@ async function basicExample() {
   console.log('Claude Code Proxy - Basic Usage Example\n');
 
   try {
-    const response = await fetch('http://localhost:4181/v1/messages', {
+    const response = await fetch('http://127.0.0.1:4181/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
