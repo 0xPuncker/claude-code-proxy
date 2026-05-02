@@ -7,6 +7,11 @@ export interface ProxyConfig {
     baseUrl: string;
     apiKey: string;
   };
+  claudeSubscription: {
+    baseUrl: string;
+    credentialsPath: string;
+    enabled: boolean;
+  };
   anthropic: {
     baseUrl: string;
     apiKey: string;
