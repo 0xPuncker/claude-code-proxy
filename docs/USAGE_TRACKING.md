@@ -278,7 +278,7 @@ If you don't want to use database tracking, simply don't set the `DATABASE_URL` 
 - **Volume**: postgres_data
 
 ### Adminer (Database UI)
-- **URL**: http://localhost:8080
+- **URL**: http://127.0.0.1:8080
 - **Server**: postgres
 - **Username**: postgres
 - **Password**: postgres

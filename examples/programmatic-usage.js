@@ -37,7 +37,7 @@ process.on('SIGINT', () => {
   process.exit(0);
 });
 
-console.log('✅ Proxy server started on http://localhost:4182');
+console.log('✅ Proxy server started on http://127.0.0.1:4182');
 console.log('Press Ctrl+C to stop the server');
 
 // Keep the process running

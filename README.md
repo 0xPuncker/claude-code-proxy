@@ -181,7 +181,7 @@ The docker-compose setup includes three services:
 #### Database Access
 
 **Via Adminer Web UI:**
-- URL: `http://localhost:8080`
+- URL: `http://127.0.0.1:8080`
 - System: PostgreSQL
 - Server: `cc-db`
 - Username: `postgres`
