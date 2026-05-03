@@ -427,7 +427,8 @@ export class ClaudeCodeProxy {
       const body = JSON.parse(bodyStr);
       const allowedFields = [
         "model", "messages", "max_tokens", "stop_sequences", "stream",
-        "system", "temperature", "top_p", "top_k", "metadata", "tools", "tool_choice"
+        "system", "temperature", "top_p", "top_k", "metadata", "tools", "tool_choice",
+        "thinking"
       ];
 
       const cleaned: Record<string, unknown> = {};
@@ -1164,7 +1165,7 @@ export class ClaudeCodeProxy {
    */
   private async handleUsageRequest(clientRes: ServerResponse): Promise<void> {
     try {
-      const url = new URL(clientRes.req?.url || '', `http://localhost:${this.config.port}`);
+      const url = new URL(clientRes.req?.url || '', `http://127.0.0.1:${this.config.port}`);
       const days = parseInt(url.searchParams.get('days') || '7', 10);
       const limit = parseInt(url.searchParams.get('limit') || '100', 10);
       
@@ -1214,7 +1215,7 @@ export class ClaudeCodeProxy {
     const apiStatus = this.config.anthropic.apiKey ? "Anthropic API ✓" : "Anthropic API (no key)";
 
     this.server.listen(port, "0.0.0.0", () => {
-      this.logger.ok(`Claude Code Proxy listening on http://localhost:${port}`);
+      this.logger.ok(`Claude Code Proxy listening on http://127.0.0.1:${port}`);
       const cbEnabled = this.config.circuitBreaker?.enabled !== false;
       const quotaLimit = this.config.circuitBreaker?.anthropicWeeklyLimit || 0;
       const quotaThreshold = this.config.circuitBreaker?.quotaWarningThreshold || 80;
@@ -1224,12 +1225,12 @@ export class ClaudeCodeProxy {
         if (quotaLimit > 0) {
           this.logger.info(`Anthropic weekly quota: ${quotaLimit} tokens (fallback at ${quotaThreshold}%)`);
         }
-        this.logger.info(`Provider health available at http://localhost:${port}/providers`);
+        this.logger.info(`Provider health available at http://127.0.0.1:${port}/providers`);
       }
       this.logger.info(`Subscription fallback: ${subStatus} | Direct API: ${apiStatus}`);
       this.logger.info(`Model mappings: ${Object.keys(this.config.modelFallbackMap).length} models configured`);
-      this.logger.info(`Health check available at http://localhost:${port}/health`);
-      this.logger.info(`Usage stats available at http://localhost:${port}/usage`);
+      this.logger.info(`Health check available at http://127.0.0.1:${port}/health`);
+      this.logger.info(`Usage stats available at http://127.0.0.1:${port}/usage`);
       if (this.usageTracker.isTrackingEnabled()) {
         this.logger.ok(`Request tracking enabled with PostgreSQL`);
       }
