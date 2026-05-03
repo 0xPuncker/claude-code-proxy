@@ -46,6 +46,12 @@ const DEFAULT_CONFIG: ProxyConfig = {
   },
   fallbackOnCodes: [429, 503, 502],
   logLevel: "info",
+  timeout: {
+    requestMs: parseInt(process.env.API_TIMEOUT_MS || "300000", 10),      // 5 minutes default
+    streamingMs: parseInt(process.env.API_STREAMING_TIMEOUT_MS || "600000", 10), // 10 minutes default
+    maxRetries: parseInt(process.env.API_MAX_RETRIES || "3", 10),
+    retryDelayMs: parseInt(process.env.API_RETRY_DELAY_MS || "1000", 10),
+  },
   circuitBreaker: {
     enabled: process.env.CIRCUIT_BREAKER_ENABLED !== "false",
     cooldownMs: parseInt(process.env.CIRCUIT_BREAKER_COOLDOWN_MS || "60000", 10),
@@ -164,6 +170,7 @@ export class ClaudeCodeProxy {
       claudeSubscription: { ...DEFAULT_CONFIG.claudeSubscription, ...config.claudeSubscription },
       anthropic: { ...DEFAULT_CONFIG.anthropic, ...config.anthropic },
       modelFallbackMap: { ...DEFAULT_CONFIG.modelFallbackMap, ...config.modelFallbackMap },
+      timeout: { ...DEFAULT_CONFIG.timeout, ...config.timeout },
       circuitBreaker: { ...DEFAULT_CONFIG.circuitBreaker, ...config.circuitBreaker },
       database: config.database || DEFAULT_CONFIG.database,
     };
@@ -285,17 +292,59 @@ export class ClaudeCodeProxy {
   }
 
   /**
-   * Perform HTTP/HTTPS request
+   * Perform HTTP/HTTPS request with timeout and retry logic
    */
-  private async httpRequest(url: string, options: RequestOptions): Promise<HttpResponse> {
+  private async httpRequest(url: string, options: RequestOptions, timeoutMs?: number): Promise<HttpResponse> {
+    const timeout = timeoutMs || this.config.timeout?.requestMs || 300000; // 5 minutes default
+    const maxRetries = this.config.timeout?.maxRetries || 3;
+    const retryDelay = this.config.timeout?.retryDelayMs || 1000;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const result = await this.executeRequest(url, options, timeout);
+        return result;
+      } catch (err) {
+        const isTimeout = err instanceof Error && (
+          err.message.includes('timeout') ||
+          err.message.includes('ETIMEDOUT') ||
+          err.message.includes('ESOCKETTIMEDOUT')
+        );
+
+        if (isTimeout && attempt < maxRetries) {
+          const delay = retryDelay * Math.pow(2, attempt); // Exponential backoff
+          this.logger.warn(`Request timeout (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+
+        if (isTimeout) {
+          this.logger.error(`Request timed out after ${maxRetries + 1} attempts (${timeout}ms timeout)`);
+        }
+        throw err;
+      }
+    }
+
+    throw new Error('Max retries exceeded');
+  }
+
+  /**
+   * Execute a single HTTP request with timeout
+   */
+  private executeRequest(url: string, options: RequestOptions, timeoutMs: number): Promise<HttpResponse> {
     return new Promise((resolve, reject) => {
       const parsedUrl = new URL(url);
       const mod = parsedUrl.protocol === "https:" ? https : http;
+
+      const timeout = setTimeout(() => {
+        req.destroy();
+        reject(new Error(`Request timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
 
       const req = mod.request(
         parsedUrl,
         { method: options.method || "GET", headers: options.headers || {} },
         (res) => {
+          clearTimeout(timeout);
           const chunks: Buffer[] = [];
           res.on("data", (chunk: Buffer) => chunks.push(chunk));
           res.on("end", () => {
@@ -308,7 +357,11 @@ export class ClaudeCodeProxy {
         }
       );
 
-      req.on("error", reject);
+      req.on("error", (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+
       if (options.body) req.write(options.body);
       req.end();
     });
@@ -755,6 +808,7 @@ export class ClaudeCodeProxy {
       const config = provider === 'zai' ? this.config.zai : this.config.anthropic;
       const headers = this.buildProviderHeaders(provider, reqHeaders);
       const body = provider === 'anthropic' ? this.cleanBody(reqBody) : reqBody;
+      const timeoutMs = this.config.timeout?.streamingMs || 600000; // 10 minutes default for streaming
 
       if (provider === 'anthropic') {
         headers["content-length"] = Buffer.byteLength(body).toString();
@@ -767,7 +821,22 @@ export class ClaudeCodeProxy {
           const url = new URL(`${config.baseUrl}${reqPath}`);
           const mod = url.protocol === "https:" ? https : http;
           const req = mod.request(url, { method: reqMethod, headers }, resolve);
-          req.on("error", reject);
+
+          // Set timeout for streaming request
+          const timeout = setTimeout(() => {
+            req.destroy();
+            reject(new Error(`Streaming request timeout after ${timeoutMs}ms`));
+          }, timeoutMs);
+
+          req.on("error", (err) => {
+            clearTimeout(timeout);
+            reject(err);
+          });
+
+          req.on('response', () => {
+            clearTimeout(timeout); // Clear timeout on successful response
+          });
+
           if (body) req.write(body);
           req.end();
         });

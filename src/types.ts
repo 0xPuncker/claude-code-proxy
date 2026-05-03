@@ -19,6 +19,12 @@ export interface ProxyConfig {
   modelFallbackMap: Record<string, string>;
   fallbackOnCodes: number[];
   logLevel?: 'debug' | 'info' | 'warn' | 'error' | 'silent';
+  timeout?: {
+    requestMs?: number;        // Timeout for non-streaming requests (default: 5 minutes)
+    streamingMs?: number;      // Timeout for streaming requests (default: 10 minutes)
+    maxRetries?: number;       // Maximum retry attempts for timeouts (default: 3)
+    retryDelayMs?: number;     // Delay between retries (default: 1000ms)
+  };
   database?: {
     host: string;
     port: number;
