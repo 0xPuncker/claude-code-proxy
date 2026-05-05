@@ -8,6 +8,10 @@ services:
     ports:
       - "${PROXY_PORT:-4181}:4181"
     environment:
+      - API_TIMEOUT_MS=300000
+      - API_STREAMING_TIMEOUT_MS=600000
+      - API_MAX_RETRIES=3
+      - API_RETRY_DELAY_MS=1000
       - PROXY_PORT=${PROXY_PORT:-4181}
       - ZAI_API_KEY=${ZAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
