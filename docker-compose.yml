@@ -7,34 +7,38 @@ services:
     container_name: ${PROXY_CONTAINER_NAME:-cc-proxy}
     ports:
       - "${PROXY_PORT:-4181}:4181"
+    env_file:
+      - .env
     environment:
-      - API_TIMEOUT_MS=300000
-      - API_STREAMING_TIMEOUT_MS=600000
-      - API_MAX_RETRIES=3
-      - API_RETRY_DELAY_MS=1000
-      - PROXY_PORT=${PROXY_PORT:-4181}
-      - ZAI_API_KEY=${ZAI_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - CLAUDE_SUBSCRIPTION_ENABLED=${CLAUDE_SUBSCRIPTION_ENABLED:-true}
-      - CLAUDE_CREDENTIALS_PATH=/root/.claude/.credentials.json
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@${DB_HOST:-cc-db}:${DB_PORT:-5432}/${POSTGRES_DB:-claude_proxy}
-      - DB_HOST=${DB_HOST:-cc-db}
-      - DB_PORT=${DB_PORT:-5432}
-      - DB_NAME=${POSTGRES_DB:-claude_proxy}
-      - DB_USER=${POSTGRES_USER:-postgres}
-      - DB_PASSWORD=${POSTGRES_PASSWORD:-postgres}
-      - DB_SSL=${DB_SSL:-false}
-      - DB_MAX_CONNECTIONS=${DB_MAX_CONNECTIONS:-10}
-      - DB_IDLE_TIMEOUT_MS=${DB_IDLE_TIMEOUT_MS:-30000}
-      - DB_CONNECTION_TIMEOUT_MS=${DB_CONNECTION_TIMEOUT_MS:-2000}
+      - API_TIMEOUT_MS=${API_TIMEOUT_MS:-18000000}
+      - API_STREAMING_TIMEOUT_MS=${API_STREAMING_TIMEOUT_MS:-18000000}
+      - API_MAX_RETRIES=${API_MAX_RETRIES:-5}
+      - API_RETRY_DELAY_MS=${API_RETRY_DELAY_MS:-2000}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - NODE_ENV=${NODE_ENV:-production}
+      - CLAUDE_CREDENTIALS_PATH=/app/credentials.json
     volumes:
-      - ${CLAUDE_CREDENTIALS_PATH}:/root/.claude/.credentials.json:ro
+      - ${USERPROFILE}/.claude/.credentials.json:/app/credentials.json:rw
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:${PROXY_PORT:-4181}/health || exit 1",
+        ]
+      interval: ${PROXY_HEALTHCHECK_INTERVAL:-30s}
+      timeout: ${PROXY_HEALTHCHECK_TIMEOUT:-5s}
+      retries: ${PROXY_HEALTHCHECK_RETRIES:-3}
+      start_period: ${PROXY_HEALTHCHECK_START_PERIOD:-10s}
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    extra_hosts:
+      - "claude.ai:160.79.104.10"
+      - "api.claude.ai:160.79.104.10"
     depends_on:
       cc-db:
         condition: service_healthy
-    restart: ${RESTART_POLICY:-unless-stopped}
+    restart: "no"
     networks:
       - claude-network
 

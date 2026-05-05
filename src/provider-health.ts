@@ -6,7 +6,7 @@ export enum ProviderState {
   DEGRADED = "degraded",
   UNAVAILABLE = "unavailable",
   COOLING_DOWN = "cooling_down",
-  QUOTA_EXCEEDED = "quota_exceeded"
+  QUOTA_EXCEEDED = "quota_exceeded",
 }
 
 /**
@@ -38,7 +38,7 @@ interface WeeklyQuota {
  * Provider configuration
  */
 export interface ProviderConfig {
-  name: 'zai' | 'anthropic';
+  name: "anthropic" | "zai" | "openrouter";
   baseUrl: string;
   apiKey: string;
   cooldownMs: number;
@@ -46,14 +46,14 @@ export interface ProviderConfig {
   unavailableThreshold: number; // consecutive errors to mark as unavailable
   healthCheckInterval: number; // ms between health checks when unhealthy
   weeklyQuota?: WeeklyQuota; // optional weekly quota tracking
-  priority: number; // lower = higher priority (Anthropic = 1, Z.AI = 2)
+  priority: number; // lower = higher priority (Anthropic = 1, Z.AI = 2, OpenRouter = 3)
 }
 
 /**
  * Provider health status
  */
 export interface ProviderHealthStatus {
-  provider: 'zai' | 'anthropic';
+  provider: "anthropic" | "zai" | "openrouter";
   state: ProviderState;
   available: boolean;
   metrics: ProviderMetrics;
@@ -72,18 +72,21 @@ export interface ProviderHealthStatus {
  * Implements circuit breaker pattern with automatic recovery
  */
 export class ProviderHealth {
-  private providers: Map<'zai' | 'anthropic', ProviderConfig>;
-  private metrics: Map<'zai' | 'anthropic', ProviderMetrics>;
-  private state: Map<'zai' | 'anthropic', ProviderState>;
-  private cooldownUntil: Map<'zai' | 'anthropic', number>;
-  private healthCheckTimers: Map<'zai' | 'anthropic', NodeJS.Timeout>;
-  private healthCheckCallback?: (provider: 'zai' | 'anthropic') => Promise<boolean>;
-  private weeklyQuota: Map<'zai' | 'anthropic', WeeklyQuota>;
+  private providers: Map<"anthropic" | "zai" | "openrouter", ProviderConfig>;
+  private metrics: Map<"anthropic" | "zai" | "openrouter", ProviderMetrics>;
+  private state: Map<"anthropic" | "zai" | "openrouter", ProviderState>;
+  private cooldownUntil: Map<"anthropic" | "zai" | "openrouter", number>;
+  private healthCheckTimers: Map<"anthropic" | "zai" | "openrouter", NodeJS.Timeout>;
+  private healthCheckCallback?: (
+    provider: "anthropic" | "zai" | "openrouter"
+  ) => Promise<boolean>;
+  private weeklyQuota: Map<"anthropic" | "zai" | "openrouter", WeeklyQuota>;
   private currentWeekStart: number;
 
   constructor(
-    zaiConfig: { baseUrl: string; apiKey: string },
     anthropicConfig: { baseUrl: string; apiKey: string },
+    zaiConfig: { baseUrl: string; apiKey: string },
+    openrouterConfig: { baseUrl: string; apiKey: string },
     options?: {
       cooldownMs?: number;
       degradedThreshold?: number;
@@ -104,56 +107,112 @@ export class ProviderHealth {
     this.currentWeekStart = this.getWeekStart();
 
     // Create Anthropic quota if limit is set
-    const anthropicQuota = anthropicWeeklyLimit > 0 ? {
-      limit: anthropicWeeklyLimit,
-      warningThreshold: quotaWarningThreshold,
-      usedTokens: 0,
-      weekStart: this.currentWeekStart
-    } : undefined;
+    const anthropicQuota =
+      anthropicWeeklyLimit > 0
+        ? {
+            limit: anthropicWeeklyLimit,
+            warningThreshold: quotaWarningThreshold,
+            usedTokens: 0,
+            weekStart: this.currentWeekStart,
+          }
+        : undefined;
 
+    // Initialize weekly quotas for all providers
     this.weeklyQuota = new Map([
-      ['zai', { limit: 0, warningThreshold: 100, usedTokens: 0, weekStart: this.currentWeekStart }],
-      ['anthropic', anthropicQuota || { limit: 0, warningThreshold: 100, usedTokens: 0, weekStart: this.currentWeekStart }]
+      [
+        "anthropic",
+        anthropicQuota || {
+          limit: 0,
+          warningThreshold: 100,
+          usedTokens: 0,
+          weekStart: this.currentWeekStart,
+        },
+      ],
+      [
+        "zai",
+        {
+          limit: 0,
+          warningThreshold: 100,
+          usedTokens: 0,
+          weekStart: this.currentWeekStart,
+        },
+      ],
+      [
+        "openrouter",
+        {
+          limit: 0,
+          warningThreshold: 100,
+          usedTokens: 0,
+          weekStart: this.currentWeekStart,
+        },
+      ],
     ]);
 
+    // Initialize provider configurations with priority order
     this.providers = new Map([
-      ['zai', {
-        name: 'zai',
-        baseUrl: zaiConfig.baseUrl,
-        apiKey: zaiConfig.apiKey,
-        cooldownMs,
-        degradedThreshold,
-        unavailableThreshold,
-        healthCheckInterval,
-        weeklyQuota: this.weeklyQuota.get('zai'),
-        priority: 2 // Z.AI is secondary (lower priority)
-      }],
-      ['anthropic', {
-        name: 'anthropic',
-        baseUrl: anthropicConfig.baseUrl,
-        apiKey: anthropicConfig.apiKey,
-        cooldownMs,
-        degradedThreshold,
-        unavailableThreshold,
-        healthCheckInterval,
-        weeklyQuota: this.weeklyQuota.get('anthropic'),
-        priority: 1 // Anthropic is primary (higher priority)
-      }]
+      [
+        "anthropic",
+        {
+          name: "anthropic",
+          baseUrl: anthropicConfig.baseUrl,
+          apiKey: anthropicConfig.apiKey,
+          cooldownMs,
+          degradedThreshold,
+          unavailableThreshold,
+          healthCheckInterval,
+          weeklyQuota: this.weeklyQuota.get("anthropic"),
+          priority: 1, // Anthropic API is primary (highest priority)
+        },
+      ],
+      [
+        "zai",
+        {
+          name: "zai",
+          baseUrl: zaiConfig.baseUrl,
+          apiKey: zaiConfig.apiKey,
+          cooldownMs,
+          degradedThreshold,
+          unavailableThreshold,
+          healthCheckInterval,
+          weeklyQuota: this.weeklyQuota.get("zai"),
+          priority: 2, // Z.AI is secondary
+        },
+      ],
+      [
+        "openrouter",
+        {
+          name: "openrouter",
+          baseUrl: openrouterConfig.baseUrl,
+          apiKey: openrouterConfig.apiKey,
+          cooldownMs,
+          degradedThreshold,
+          unavailableThreshold,
+          healthCheckInterval,
+          weeklyQuota: this.weeklyQuota.get("openrouter"),
+          priority: 3, // OpenRouter is fallback (lowest priority)
+        },
+      ],
     ]);
 
+    // Initialize metrics for all providers
     this.metrics = new Map([
-      ['zai', this.createEmptyMetrics()],
-      ['anthropic', this.createEmptyMetrics()]
+      ["anthropic", this.createEmptyMetrics()],
+      ["zai", this.createEmptyMetrics()],
+      ["openrouter", this.createEmptyMetrics()],
     ]);
 
+    // Initialize states for all providers
     this.state = new Map([
-      ['zai', ProviderState.HEALTHY],
-      ['anthropic', ProviderState.HEALTHY]
+      ["anthropic", ProviderState.HEALTHY],
+      ["zai", ProviderState.HEALTHY],
+      ["openrouter", ProviderState.HEALTHY],
     ]);
 
+    // Initialize cooldown timers for all providers
     this.cooldownUntil = new Map([
-      ['zai', 0],
-      ['anthropic', 0]
+      ["anthropic", 0],
+      ["zai", 0],
+      ["openrouter", 0],
     ]);
 
     this.healthCheckTimers = new Map();
@@ -166,7 +225,9 @@ export class ProviderHealth {
     const now = new Date();
     const day = now.getUTCDay();
     const diff = now.getUTCDate() - day + (day === 0 ? -6 : 1); // Adjust so Monday is 0
-    const monday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), diff));
+    const monday = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), diff)
+    );
     return monday.getTime();
   }
 
@@ -177,7 +238,7 @@ export class ProviderHealth {
     const newWeekStart = this.getWeekStart();
     if (newWeekStart > this.currentWeekStart) {
       this.currentWeekStart = newWeekStart;
-      (['zai', 'anthropic'] as const).forEach(provider => {
+      (["zai", "anthropic"] as const).forEach((provider) => {
         const quota = this.weeklyQuota.get(provider);
         if (quota) {
           quota.weekStart = newWeekStart;
@@ -197,21 +258,23 @@ export class ProviderHealth {
       lastSuccessTime: 0,
       lastFailureTime: 0,
       consecutiveErrors: 0,
-      averageLatency: 0
+      averageLatency: 0,
     };
   }
 
   /**
    * Set the health check callback function
    */
-  setHealthCheckCallback(callback: (provider: 'zai' | 'anthropic') => Promise<boolean>): void {
+  setHealthCheckCallback(
+    callback: (provider: "anthropic" | "zai" | "openrouter") => Promise<boolean>
+  ): void {
     this.healthCheckCallback = callback;
   }
 
   /**
    * Get the current state of a provider
    */
-  getState(provider: 'zai' | 'anthropic'): ProviderState {
+  getState(provider: "anthropic" | "zai" | "openrouter"): ProviderState {
     // Check if cooldown has expired
     const cooldownEnd = this.cooldownUntil.get(provider) || 0;
     if (cooldownEnd > Date.now()) {
@@ -230,7 +293,10 @@ export class ProviderHealth {
 
     // Return stored state or reset from cooldown
     const storedState = this.state.get(provider);
-    if (storedState === ProviderState.COOLING_DOWN && cooldownEnd <= Date.now()) {
+    if (
+      storedState === ProviderState.COOLING_DOWN &&
+      cooldownEnd <= Date.now()
+    ) {
       this.state.set(provider, ProviderState.HEALTHY);
       this.clearHealthCheckTimer(provider);
       return ProviderState.HEALTHY;
@@ -240,23 +306,34 @@ export class ProviderHealth {
   }
 
   /**
-   * Check if a provider is available for requests
+   * Check if a provider has a valid API key configured
    */
-  isAvailable(provider: 'zai' | 'anthropic'): boolean {
+  hasValidApiKey(provider: "anthropic" | "zai" | "openrouter"): boolean {
+    const config = this.providers.get(provider);
+    return !!config && !!config.apiKey && config.apiKey.length > 0;
+  }
+
+  /**
+   * Check if a provider is available for requests
+   * Now also checks if the provider has a valid API key
+   */
+  isAvailable(provider: "anthropic" | "zai" | "openrouter"): boolean {
     const state = this.getState(provider);
-    return state === ProviderState.HEALTHY || state === ProviderState.DEGRADED;
+    const hasKey = this.hasValidApiKey(provider);
+    return (state === ProviderState.HEALTHY || state === ProviderState.DEGRADED) && hasKey;
   }
 
   /**
    * Get the best available provider based on priority and health
-   * Anthropic (priority 1) is preferred over Z.AI (priority 2)
+   * Priority: Anthropic (1) > Z.AI (2) > OpenRouter (3)
+   * Only returns providers that have valid API keys and are healthy/degraded
    */
-  getBestProvider(): 'zai' | 'anthropic' | null {
+  getBestProvider(): "anthropic" | "zai" | "openrouter" | null {
     this.checkWeekRollover();
 
-    const providers = ['anthropic', 'zai'] as const;
+    const providers = ["anthropic", "zai", "openrouter"] as const;
     const available = providers
-      .filter(p => this.isAvailable(p))
+      .filter((p) => this.isAvailable(p)) // Now checks both health AND API key
       .sort((a, b) => {
         const configA = this.providers.get(a)!;
         const configB = this.providers.get(b)!;
@@ -267,9 +344,46 @@ export class ProviderHealth {
   }
 
   /**
+   * Get the best provider for a specific model family
+   * - Claude models (claude-*) → Anthropic (1) → Z.AI (2) → OpenRouter (3)
+   * - GLM models (glm-*) → Z.AI (1) → Anthropic (2) → OpenRouter (3)
+   * - Other models → Use default priority order
+   */
+  getBestProviderForModel(model: string | undefined): "anthropic" | "zai" | "openrouter" | null {
+    this.checkWeekRollover();
+
+    // Determine provider priority based on model family
+    let providerOrder: ("anthropic" | "zai" | "openrouter")[] = ["anthropic", "zai", "openrouter"];
+
+    if (model) {
+      const modelLower = model.toLowerCase();
+      if (modelLower.startsWith("claude-")) {
+        // Claude models: Anthropic first, then Z.AI (as Anthropic-compatible), then OpenRouter
+        providerOrder = ["anthropic", "zai", "openrouter"];
+      } else if (modelLower.startsWith("glm-")) {
+        // GLM models: Z.AI first (native GLM support), then Anthropic, then OpenRouter
+        providerOrder = ["zai", "anthropic", "openrouter"];
+      }
+    }
+
+    // Find first available provider in priority order
+    for (const provider of providerOrder) {
+      if (this.isAvailable(provider)) {
+        return provider;
+      }
+    }
+
+    return null; // No provider available
+  }
+
+  /**
    * Record token usage for a provider
    */
-  recordTokenUsage(provider: 'zai' | 'anthropic', inputTokens: number, outputTokens: number): void {
+  recordTokenUsage(
+    provider: "anthropic" | "zai" | "openrouter",
+    inputTokens: number,
+    outputTokens: number
+  ): void {
     this.checkWeekRollover();
     const quota = this.weeklyQuota.get(provider);
     if (quota && quota.limit > 0) {
@@ -286,7 +400,7 @@ export class ProviderHealth {
   /**
    * Get quota information for a provider
    */
-  getQuotaInfo(provider: 'zai' | 'anthropic') {
+  getQuotaInfo(provider: "anthropic" | "zai" | "openrouter") {
     this.checkWeekRollover();
     const quota = this.weeklyQuota.get(provider);
     if (!quota || quota.limit === 0) return undefined;
@@ -298,7 +412,7 @@ export class ProviderHealth {
       remaining: Math.max(0, quota.limit - quota.usedTokens),
       percentageUsed: Math.round(percentageUsed * 100) / 100,
       weekStart: new Date(quota.weekStart).toISOString(),
-      warningThreshold: quota.warningThreshold
+      warningThreshold: quota.warningThreshold,
     };
   }
 
@@ -307,7 +421,7 @@ export class ProviderHealth {
    */
   getAllStatus(): ProviderHealthStatus[] {
     this.checkWeekRollover();
-    return (['zai', 'anthropic'] as const).map(provider => {
+    return (["anthropic", "zai", "openrouter"] as const).map((provider) => {
       const quota = this.getQuotaInfo(provider);
       return {
         provider,
@@ -315,13 +429,15 @@ export class ProviderHealth {
         available: this.isAvailable(provider),
         metrics: this.metrics.get(provider)!,
         readyAt: this.cooldownUntil.get(provider),
-        quota: quota ? {
-          limit: quota.limit,
-          used: quota.used,
-          remaining: quota.remaining,
-          percentageUsed: quota.percentageUsed,
-          weekStart: quota.weekStart
-        } : undefined
+        quota: quota
+          ? {
+              limit: quota.limit,
+              used: quota.used,
+              remaining: quota.remaining,
+              percentageUsed: quota.percentageUsed,
+              weekStart: quota.weekStart,
+            }
+          : undefined,
       };
     });
   }
@@ -329,7 +445,7 @@ export class ProviderHealth {
   /**
    * Record a successful request
    */
-  recordSuccess(provider: 'zai' | 'anthropic', latencyMs: number): void {
+  recordSuccess(provider: "anthropic" | "zai" | "openrouter", latencyMs: number): void {
     const metrics = this.metrics.get(provider)!;
     metrics.totalRequests++;
     metrics.successfulRequests++;
@@ -340,7 +456,9 @@ export class ProviderHealth {
     if (metrics.averageLatency === 0) {
       metrics.averageLatency = latencyMs;
     } else {
-      metrics.averageLatency = Math.round(metrics.averageLatency * 0.9 + latencyMs * 0.1);
+      metrics.averageLatency = Math.round(
+        metrics.averageLatency * 0.9 + latencyMs * 0.1
+      );
     }
 
     // Reset state on successful request
@@ -354,7 +472,10 @@ export class ProviderHealth {
    * Record a failed request with error type
    * Context window and rate limit errors trigger immediate cooldown
    */
-  recordFailure(provider: 'zai' | 'anthropic', errorType: 'rate_limit' | 'context_window' | 'other', statusCode?: number): void {
+  recordFailure(
+    provider: "anthropic" | "zai" | "openrouter",
+    errorType: "rate_limit" | "context_window" | "other"
+  ): void {
     const metrics = this.metrics.get(provider)!;
     const config = this.providers.get(provider)!;
 
@@ -364,15 +485,15 @@ export class ProviderHealth {
     metrics.consecutiveErrors++;
 
     // Track specific error types
-    if (errorType === 'rate_limit') {
+    if (errorType === "rate_limit") {
       metrics.rateLimitHits++;
-    } else if (errorType === 'context_window') {
+    } else if (errorType === "context_window") {
       metrics.contextWindowErrors++;
     }
 
     // IMMEDIATE COOLDOWN for context window or rate limit errors
     // This prevents cascading failures when many concurrent requests are sent
-    if (errorType === 'context_window' || errorType === 'rate_limit') {
+    if (errorType === "context_window" || errorType === "rate_limit") {
       this.enterCooldown(provider);
       return;
     }
@@ -393,7 +514,7 @@ export class ProviderHealth {
   /**
    * Put a provider into cooldown
    */
-  private enterCooldown(provider: 'zai' | 'anthropic'): void {
+  private enterCooldown(provider: "anthropic" | "zai" | "openrouter"): void {
     const config = this.providers.get(provider)!;
     const cooldownEnd = Date.now() + config.cooldownMs;
 
@@ -407,7 +528,10 @@ export class ProviderHealth {
   /**
    * Schedule a health check for a provider
    */
-  private scheduleHealthCheck(provider: 'zai' | 'anthropic', delayMs?: number): void {
+  private scheduleHealthCheck(
+    provider: "anthropic" | "zai" | "openrouter",
+    delayMs?: number
+  ): void {
     this.clearHealthCheckTimer(provider);
 
     const config = this.providers.get(provider)!;
@@ -438,7 +562,7 @@ export class ProviderHealth {
   /**
    * Clear a pending health check timer
    */
-  private clearHealthCheckTimer(provider: 'zai' | 'anthropic'): void {
+  private clearHealthCheckTimer(provider: "anthropic" | "zai" | "openrouter"): void {
     const timer = this.healthCheckTimers.get(provider);
     if (timer) {
       clearTimeout(timer);
@@ -449,7 +573,7 @@ export class ProviderHealth {
   /**
    * Reset all metrics for a provider
    */
-  resetMetrics(provider: 'zai' | 'anthropic'): void {
+  resetMetrics(provider: "anthropic" | "zai" | "openrouter"): void {
     this.metrics.set(provider, this.createEmptyMetrics());
     this.state.set(provider, ProviderState.HEALTHY);
     this.cooldownUntil.set(provider, 0);
@@ -460,21 +584,21 @@ export class ProviderHealth {
    * Reset all providers
    */
   resetAll(): void {
-    (['zai', 'anthropic'] as const).forEach(p => this.resetMetrics(p));
+    (["anthropic", "zai", "openrouter"] as const).forEach((p) => this.resetMetrics(p));
   }
 
   /**
    * Clean up timers
    */
   destroy(): void {
-    this.healthCheckTimers.forEach(timer => clearTimeout(timer));
+    this.healthCheckTimers.forEach((timer) => clearTimeout(timer));
     this.healthCheckTimers.clear();
   }
 
   /**
    * Get provider config for making requests
    */
-  getProviderConfig(provider: 'zai' | 'anthropic'): ProviderConfig {
+  getProviderConfig(provider: "anthropic" | "zai" | "openrouter"): ProviderConfig {
     return this.providers.get(provider)!;
   }
 }
