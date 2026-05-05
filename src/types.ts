@@ -3,7 +3,18 @@
  */
 export interface ProxyConfig {
   port: number;
+  // Primary provider: Anthropic API (Claude models)
+  anthropic: {
+    baseUrl: string;
+    apiKey: string;
+  };
+  // Secondary provider: Z.AI API (GLM models)
   zai: {
+    baseUrl: string;
+    apiKey: string;
+  };
+  // Fallback provider: OpenRouter (free models)
+  openrouter: {
     baseUrl: string;
     apiKey: string;
   };
@@ -11,10 +22,6 @@ export interface ProxyConfig {
     baseUrl: string;
     credentialsPath: string;
     enabled: boolean;
-  };
-  anthropic: {
-    baseUrl: string;
-    apiKey: string;
   };
   modelFallbackMap: Record<string, string>;
   fallbackOnCodes: number[];
@@ -85,7 +92,7 @@ export interface RequestRecord {
   method: string;
   path: string;
   model: string | null;
-  provider: 'zai' | 'anthropic';
+  provider: 'anthropic' | 'zai' | 'openrouter';
   status_code: number;
   duration_ms: number | null;
   streaming: boolean;
@@ -145,7 +152,7 @@ export interface RequestMetrics {
   startTime: number;
   endTime: number;
   duration: number;
-  provider: 'zai' | 'anthropic';
+  provider: 'anthropic' | 'zai' | 'openrouter';
   fallback: boolean;
   model?: string;
   statusCode: number;

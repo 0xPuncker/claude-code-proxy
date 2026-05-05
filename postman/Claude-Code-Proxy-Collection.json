@@ -1,8 +1,8 @@
 {
   "info": {
     "name": "Claude Code Proxy API",
-    "description": "Complete API collection for Claude Code Proxy with usage tracking",
-    "version": "1.0.0",
+    "description": "Complete API collection for Claude Code Proxy with usage tracking, provider health monitoring, and configuration management",
+    "version": "2.0.0",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -32,6 +32,45 @@
               "path": ["health"]
             },
             "description": "Check proxy health status and configuration"
+          }
+        },
+        {
+          "name": "Provider Configuration",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/config",
+              "host": ["{{baseUrl}}"],
+              "path": ["config"]
+            },
+            "description": "Get detailed provider configuration (API keys are masked for security)"
+          }
+        },
+        {
+          "name": "Provider Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/providers",
+              "host": ["{{baseUrl}}"],
+              "path": ["providers"]
+            },
+            "description": "Get real-time provider health status and metrics"
+          }
+        },
+        {
+          "name": "Reset Providers",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/providers/reset",
+              "host": ["{{baseUrl}}"],
+              "path": ["providers", "reset"]
+            },
+            "description": "Reset all providers to healthy state (clears cooldown)"
           }
         },
         {

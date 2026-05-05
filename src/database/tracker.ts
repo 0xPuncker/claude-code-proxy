@@ -1,12 +1,12 @@
-import pg from 'pg';
-import type { 
-  RequestRecord, 
-  TokenUsageRecord, 
-  DailyUsageRecord, 
+import pg from "pg";
+import type {
+  RequestRecord,
+  TokenUsageRecord,
+  DailyUsageRecord,
   UsageSummary,
   RequestMetrics,
-  AnthropicUsage 
-} from '../types.js';
+  AnthropicUsage,
+} from "../types.js";
 
 const { Pool } = pg;
 
@@ -32,21 +32,33 @@ export class UsageTracker {
     }
 
     this.isEnabled = true;
-    this.pool = new Pool({
-      host: databaseConfig.host,
-      port: databaseConfig.port,
-      database: databaseConfig.database,
-      user: databaseConfig.user,
-      password: databaseConfig.password,
-      ssl: databaseConfig.ssl ? { rejectUnauthorized: false } : undefined,
-      max: databaseConfig.maxConnections,
-      idleTimeoutMillis: databaseConfig.idleTimeoutMs,
-      connectionTimeoutMillis: databaseConfig.connectionTimeoutMs,
-    });
+    // Prefer DATABASE_URL if set — avoids mismatches between individual DB_* vars
+    const connectionString = process.env.DATABASE_URL;
+    this.pool = new Pool(
+      connectionString
+        ? {
+            connectionString,
+            ssl: databaseConfig.ssl ? { rejectUnauthorized: false } : undefined,
+            max: databaseConfig.maxConnections,
+            idleTimeoutMillis: databaseConfig.idleTimeoutMs,
+            connectionTimeoutMillis: databaseConfig.connectionTimeoutMs,
+          }
+        : {
+            host: databaseConfig.host,
+            port: databaseConfig.port,
+            database: databaseConfig.database,
+            user: databaseConfig.user,
+            password: databaseConfig.password,
+            ssl: databaseConfig.ssl ? { rejectUnauthorized: false } : undefined,
+            max: databaseConfig.maxConnections,
+            idleTimeoutMillis: databaseConfig.idleTimeoutMs,
+            connectionTimeoutMillis: databaseConfig.connectionTimeoutMs,
+          }
+    );
 
     // Handle pool errors
-    this.pool.on('error', (err) => {
-      console.error('Unexpected database pool error:', err);
+    this.pool.on("error", (err) => {
+      console.error("Unexpected database pool error:", err);
     });
   }
 
@@ -117,12 +129,12 @@ export class UsageTracker {
       `;
 
       await this.pool.query(schema);
-      console.log('✅ Database tables initialized successfully');
+      console.log("✅ Database tables initialized successfully");
 
       // Fix existing daily_usage table if it has old schema
       await this.fixDailyUsageSchema();
     } catch (error) {
-      console.error('❌ Failed to initialize database tables:', error);
+      console.error("❌ Failed to initialize database tables:", error);
       throw error;
     }
   }
@@ -145,10 +157,12 @@ export class UsageTracker {
       const result = await this.pool.query(checkQuery);
 
       if (result.rows[0].count > 0) {
-        console.log('🔧 Fixing daily_usage table schema...');
+        console.log("🔧 Fixing daily_usage table schema...");
 
         // Drop the old unique constraint on date only
-        await this.pool.query(`ALTER TABLE daily_usage DROP CONSTRAINT daily_usage_date_key;`);
+        await this.pool.query(
+          `ALTER TABLE daily_usage DROP CONSTRAINT daily_usage_date_key;`
+        );
 
         // Add the correct unique constraint on (date, model, provider)
         await this.pool.query(`
@@ -157,11 +171,11 @@ export class UsageTracker {
           UNIQUE(date, model, provider);
         `);
 
-        console.log('✅ daily_usage table schema fixed successfully');
+        console.log("✅ daily_usage table schema fixed successfully");
       }
-    } catch (error) {
+    } catch {
       // If the fix fails, it might be because the table is already correct or doesn't exist
-      console.log('ℹ️ Schema fix skipped (table may already be correct)');
+      console.log("ℹ️ Schema fix skipped (table may already be correct)");
     }
   }
 
@@ -215,13 +229,13 @@ export class UsageTracker {
       }
 
       // Update daily usage asynchronously
-      this.updateDailyUsage(requestRecord, metrics.tokenUsage).catch(err => {
-        console.error('Failed to update daily usage:', err);
+      this.updateDailyUsage(requestRecord, metrics.tokenUsage).catch((err) => {
+        console.error("Failed to update daily usage:", err);
       });
 
       return requestId;
     } catch (error) {
-      console.error('Failed to track request:', error);
+      console.error("Failed to track request:", error);
       return null;
     }
   }
@@ -229,13 +243,20 @@ export class UsageTracker {
   /**
    * Track token usage for a request
    */
-  async trackTokenUsage(requestId: number, usage: AnthropicUsage): Promise<void> {
+  async trackTokenUsage(
+    requestId: number,
+    usage: AnthropicUsage
+  ): Promise<void> {
     if (!this.isEnabled) return;
 
     try {
       const cacheCreationTokens = usage.cache_creation_tokens || 0;
       const cacheReadTokens = usage.cache_read_tokens || 0;
-      const totalTokens = usage.input_tokens + usage.output_tokens + cacheCreationTokens + cacheReadTokens;
+      const totalTokens =
+        usage.input_tokens +
+        usage.output_tokens +
+        cacheCreationTokens +
+        cacheReadTokens;
 
       const tokenRecord: TokenUsageRecord = {
         request_id: requestId,
@@ -259,7 +280,7 @@ export class UsageTracker {
         ]
       );
     } catch (error) {
-      console.error('Failed to track token usage:', error);
+      console.error("Failed to track token usage:", error);
     }
   }
 
@@ -273,20 +294,21 @@ export class UsageTracker {
     if (!this.isEnabled) return;
 
     try {
-      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
-      const model = request.model || 'unknown';
+      const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD format
+      const model = request.model || "unknown";
       const inputTokens = tokenUsage?.input_tokens || 0;
       const outputTokens = tokenUsage?.output_tokens || 0;
       const cacheReadTokens = tokenUsage?.cache_read_tokens || 0;
       const cacheCreationTokens = tokenUsage?.cache_creation_tokens || 0;
-      const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens;
+      const totalTokens =
+        inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens;
 
       await this.pool.query(
-        `INSERT INTO daily_usage (date, model, provider, total_requests, total_input_tokens, total_output_tokens, 
+        `INSERT INTO daily_usage (date, model, provider, total_requests, total_input_tokens, total_output_tokens,
                                   total_cache_read_tokens, total_cache_creation_tokens, total_tokens, total_duration_ms)
          VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (date, model, provider) 
-         DO UPDATE SET 
+         ON CONFLICT (date, model, provider)
+         DO UPDATE SET
            total_requests = daily_usage.total_requests + 1,
            total_input_tokens = daily_usage.total_input_tokens + $4,
            total_output_tokens = daily_usage.total_output_tokens + $5,
@@ -308,19 +330,22 @@ export class UsageTracker {
         ]
       );
     } catch (error) {
-      console.error('Failed to update daily usage:', error);
+      console.error("Failed to update daily usage:", error);
     }
   }
 
   /**
    * Get usage summary for a date range
    */
-  async getUsageSummary(startDate: Date, endDate: Date): Promise<UsageSummary[]> {
+  async getUsageSummary(
+    startDate: Date,
+    endDate: Date
+  ): Promise<UsageSummary[]> {
     if (!this.isEnabled) return [];
 
     try {
       const result = await this.pool.query(
-        `SELECT 
+        `SELECT
           DATE(r.timestamp) as date,
           r.provider,
           r.model,
@@ -337,12 +362,15 @@ export class UsageTracker {
         WHERE DATE(r.timestamp) BETWEEN $1 AND $2
         GROUP BY DATE(r.timestamp), r.provider, r.model
         ORDER BY date DESC, provider, model`,
-        [startDate.toISOString().split('T')[0], endDate.toISOString().split('T')[0]]
+        [
+          startDate.toISOString().split("T")[0],
+          endDate.toISOString().split("T")[0],
+        ]
       );
 
       return result.rows;
     } catch (error) {
-      console.error('Failed to get usage summary:', error);
+      console.error("Failed to get usage summary:", error);
       return [];
     }
   }
@@ -350,20 +378,23 @@ export class UsageTracker {
   /**
    * Get recent requests with pagination
    */
-  async getRecentRequests(limit: number = 100, offset: number = 0): Promise<RequestRecord[]> {
+  async getRecentRequests(
+    limit: number = 100,
+    offset: number = 0
+  ): Promise<RequestRecord[]> {
     if (!this.isEnabled) return [];
 
     try {
       const result = await this.pool.query(
-        `SELECT * FROM requests 
-         ORDER BY timestamp DESC 
+        `SELECT * FROM requests
+         ORDER BY timestamp DESC
          LIMIT $1 OFFSET $2`,
         [limit, offset]
       );
 
       return result.rows;
     } catch (error) {
-      console.error('Failed to get recent requests:', error);
+      console.error("Failed to get recent requests:", error);
       return [];
     }
   }
@@ -376,7 +407,7 @@ export class UsageTracker {
 
     try {
       const result = await this.pool.query(
-        `SELECT * FROM daily_usage 
+        `SELECT * FROM daily_usage
          WHERE date >= CURRENT_DATE - INTERVAL '1 day' * $1
          ORDER BY date DESC, model, provider`,
         [days]
@@ -384,7 +415,7 @@ export class UsageTracker {
 
       return result.rows;
     } catch (error) {
-      console.error('Failed to get daily usage:', error);
+      console.error("Failed to get daily usage:", error);
       return [];
     }
   }
@@ -397,9 +428,9 @@ export class UsageTracker {
 
     try {
       await this.pool.end();
-      console.log('Database connection pool closed');
+      console.log("Database connection pool closed");
     } catch (error) {
-      console.error('Error closing database pool:', error);
+      console.error("Error closing database pool:", error);
     }
   }
 
@@ -409,7 +440,7 @@ export class UsageTracker {
   static extractTokenUsage(responseBody: string): AnthropicUsage | null {
     try {
       const response = JSON.parse(responseBody);
-      
+
       if (response.usage) {
         return {
           input_tokens: response.usage.input_tokens || 0,
@@ -420,7 +451,7 @@ export class UsageTracker {
       }
 
       return null;
-    } catch (error) {
+    } catch {
       return null;
     }
   }
@@ -437,22 +468,26 @@ export class UsageTracker {
     for (const chunk of chunks) {
       try {
         // Parse SSE data lines
-        const lines = chunk.split('\n').filter(line => line.startsWith('data: '));
-        
+        const lines = chunk
+          .split("\n")
+          .filter((line) => line.startsWith("data: "));
+
         for (const line of lines) {
           const data = line.slice(6); // Remove 'data: ' prefix
-          if (data === '[DONE]') continue;
+          if (data === "[DONE]") continue;
 
           const parsed = JSON.parse(data);
-          
+
           if (parsed.message?.usage) {
             inputTokens = parsed.message.usage.input_tokens || inputTokens;
             outputTokens = parsed.message.usage.output_tokens || outputTokens;
-            cacheCreationTokens = parsed.message.usage.cache_creation_tokens || cacheCreationTokens;
-            cacheReadTokens = parsed.message.usage.cache_read_tokens || cacheReadTokens;
+            cacheCreationTokens =
+              parsed.message.usage.cache_creation_tokens || cacheCreationTokens;
+            cacheReadTokens =
+              parsed.message.usage.cache_read_tokens || cacheReadTokens;
           }
         }
-      } catch (error) {
+      } catch {
         // Skip invalid chunks
         continue;
       }

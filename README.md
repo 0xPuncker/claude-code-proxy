@@ -4,7 +4,8 @@
 
 ## Features
 
-- **Automatic Failover**: Primary Z.AI API with seamless fallback to Anthropic API
+- **Automatic Failover**: Primary Anthropic API with intelligent fallback to Claude Subscription and Z.AI
+- **Quota Management**: Automatic provider switching when weekly token limits are reached
 - **Model Mapping**: Automatically maps unsupported model names to compatible alternatives
 - **Streaming Support**: Full support for streaming responses
 - **Request Cleaning**: Sanitizes requests to ensure Anthropic API compatibility
@@ -310,11 +311,28 @@ interface ProxyConfig {
 ## How It Works
 
 1. **Request Interception**: The proxy receives requests destined for the Anthropic API
-2. **Primary Attempt**: Forwards requests to Z.AI API first
-3. **Smart Fallback**: If Z.AI returns specific error codes (429, 503, 502), automatically falls back to Anthropic
-4. **Request Cleaning**: Ensures all requests are Anthropic-compatible
-5. **Model Mapping**: Maps unsupported model names to compatible alternatives
-6. **Response Proxying**: Returns the response to the client transparently
+2. **Primary Attempt**: Forwards requests to Anthropic API first (primary provider)
+3. **Quota Tracking**: Monitors weekly token usage and automatically switches when limit is reached
+4. **Smart Fallback**: Automatic fallback chain: Anthropic API → Claude Subscription → Z.AI
+5. **Circuit Breaker**: Monitors provider health and handles failures (429, 502, 503)
+6. **Request Cleaning**: Ensures all requests are Anthropic-compatible
+7. **Model Mapping**: Maps unsupported model names to compatible alternatives
+8. **Response Proxying**: Returns the response to the client transparently
+
+### Provider Priority
+
+The proxy uses this priority order for automatic failover:
+
+1. **Anthropic API** (Primary) - Used first, subject to weekly quota limits
+2. **Claude Subscription** (Fallback) - Used when Anthropic API fails or quota exceeded
+3. **Z.AI** (Last Resort) - Used when both Anthropic and Subscription fail
+
+Automatic swap triggers:
+- Quota exceeded (e.g., 90% of weekly limit)
+- Rate limiting (HTTP 429)
+- Service unavailable (HTTP 502, 503)
+- Network errors
+- Consecutive failures
 
 ## Logging
 
@@ -363,29 +381,75 @@ make help           # Show all available commands
 
 ## Architecture
 
+```mermaid
+graph TB
+    Client[Client Application] -->|HTTP Request| Proxy[Claude Code Proxy]
+    
+    subgraph "Proxy Internal Processing"
+        Proxy -->|1. Intercept| Request[Request Handler]
+        Request -->|2. Clean| Cleaning[Request Cleaning]
+        Cleaning -->|3. Map| Mapping[Model Mapping]
+        Mapping -->|4. Check| CircuitBreaker{Circuit Breaker}
+    end
+    
+    subgraph "Provider Priority Chain"
+        CircuitBreaker -->|Primary| Anthropic[Anthropic API]
+        CircuitBreaker -->|Fallback 1| Subscription[Claude Subscription]
+        CircuitBreaker -->|Fallback 2| ZAI[Z.AI API]
+    end
+    
+    subgraph "Health Monitoring"
+        Health[Provider Health Monitor]
+        Health -->|Track| Anthropic
+        Health -->|Track| Subscription
+        Health -->|Track| ZAI
+    end
+    
+    subgraph "Quota Tracking"
+        Quota[Usage Tracker]
+        Quota -->|Weekly Limits| Database[(PostgreSQL)]
+    end
+    
+    Anthropic -->|Response| Response[Response Handler]
+    Subscription -->|Response| Response
+    ZAI -->|Response| Response
+    Response -->|Return| Client
+    
+    CircuitBreaker -.->|Monitor| Health
+    Anthropic -.->|Token Usage| Quota
+    Subscription -.->|Token Usage| Quota
+    ZAI -.->|Token Usage| Quota
+    
+    style Proxy fill:#4A90E2,color:#fff
+    style Anthropic fill:#50C878,color:#fff
+    style Subscription fill:#FFB347,color:#000
+    style ZAI fill:#FF6B6B,color:#fff
+    style Health fill:#9B59B6,color:#fff
+    style Quota fill:#3498DB,color:#fff
 ```
-┌─────────────┐     ┌─────────────┐     ┌──────────────┐
-│   Client    │────▶│   Proxy     │────▶│  Z.AI API    │
-└─────────────┘     └─────────────┘     └──────────────┘
-                          │                    │
-                          │ fallback           │ error
-                          ▼                    │
-                    ┌─────────────┐           │
-                    │  Request    │           │
-                    │  Cleaning   │           │
-                    └─────────────┘           │
-                          │                    │
-                          ▼                    │
-                    ┌─────────────┐           │
-                    │  Model      │           │
-                    │  Mapping    │           │
-                    └─────────────┘           │
-                          │                    │
-                          ▼                    ▼
-                    ┌──────────────────────────────┐
-                    │    Anthropic API             │
-                    └──────────────────────────────┘
-```
+
+### Flow Description
+
+1. **Request Interception**: Client sends HTTP request to proxy
+2. **Request Processing**:
+   - Request cleaning (ensure Anthropic compatibility)
+   - Model mapping (convert unsupported models)
+   - Circuit breaker check (provider health)
+3. **Provider Selection**:
+   - **Primary**: Anthropic API (subject to quota limits)
+   - **Fallback 1**: Claude Subscription (if Anthropic fails/quota exceeded)
+   - **Fallback 2**: Z.AI (if both above fail)
+4. **Health Monitoring**: Circuit breaker tracks provider health
+5. **Quota Tracking**: Usage tracker logs token consumption
+6. **Response Return**: Response sent back to client
+
+### Automatic Failover Triggers
+
+- **Quota exceeded** (e.g., 90% of weekly limit)
+- **Rate limiting** (HTTP 429)
+- **Service unavailable** (HTTP 502, 503)
+- **Network errors**
+- **Consecutive failures** (3 = degraded, 5 = unavailable)
 
 ## Contributing
 
