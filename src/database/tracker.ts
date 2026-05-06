@@ -134,9 +134,10 @@ export class UsageTracker {
 
       // Fix existing daily_usage table if it has old schema
       await this.fixDailyUsageSchema();
-    } catch (error: any) {
+    } catch (error) {
       // Database initialization failure should not break the proxy
-      if (error.code === 'ECONNREFUSED' || error.code === 'CONNECTION_ERROR') {
+      if (error instanceof Error && 'code' in error &&
+          (error.code === 'ECONNREFUSED' || error.code === 'CONNECTION_ERROR')) {
         console.warn("⚠️  Database unavailable - usage tracking disabled (proxy still works)");
         console.warn("   To fix: Start PostgreSQL or set DATABASE_URL correctly");
         console.warn("   Or disable tracking by removing database config");
@@ -243,9 +244,10 @@ export class UsageTracker {
       });
 
       return requestId;
-    } catch (error: any) {
+    } catch (error) {
       // Database connection errors should not break the proxy
-      if (error.code === 'ECONNREFUSED' || error.code === 'CONNECTION_ERROR') {
+      if (error instanceof Error && 'code' in error &&
+          (error.code === 'ECONNREFUSED' || error.code === 'CONNECTION_ERROR')) {
         // Only log once per minute to avoid spam
         const now = Date.now();
         if (!this.lastConnectionErrorLog || now - this.lastConnectionErrorLog > 60000) {
