@@ -93,6 +93,7 @@ export class ProviderHealth {
       unavailableThreshold?: number;
       healthCheckInterval?: number;
       anthropicWeeklyLimit?: number; // weekly token limit for Anthropic
+      zaiWeeklyLimit?: number; // weekly token limit for Z.AI
       quotaWarningThreshold?: number; // percentage (default: 80)
     }
   ) {
@@ -101,6 +102,7 @@ export class ProviderHealth {
     const unavailableThreshold = options?.unavailableThreshold || 5;
     const healthCheckInterval = options?.healthCheckInterval || 30000; // 30 seconds
     const anthropicWeeklyLimit = options?.anthropicWeeklyLimit || 0; // 0 = no limit
+    const zaiWeeklyLimit = options?.zaiWeeklyLimit || 0; // 0 = no limit
     const quotaWarningThreshold = options?.quotaWarningThreshold || 80;
 
     // Calculate current week start (Monday 00:00:00 UTC)
@@ -111,6 +113,17 @@ export class ProviderHealth {
       anthropicWeeklyLimit > 0
         ? {
             limit: anthropicWeeklyLimit,
+            warningThreshold: quotaWarningThreshold,
+            usedTokens: 0,
+            weekStart: this.currentWeekStart,
+          }
+        : undefined;
+
+    // Create Z.AI quota if limit is set
+    const zaiQuota =
+      zaiWeeklyLimit > 0
+        ? {
+            limit: zaiWeeklyLimit,
             warningThreshold: quotaWarningThreshold,
             usedTokens: 0,
             weekStart: this.currentWeekStart,
@@ -130,7 +143,7 @@ export class ProviderHealth {
       ],
       [
         "zai",
-        {
+        zaiQuota || {
           limit: 0,
           warningThreshold: 100,
           usedTokens: 0,
@@ -358,10 +371,10 @@ export class ProviderHealth {
     if (model) {
       const modelLower = model.toLowerCase();
       if (modelLower.startsWith("claude-")) {
-        // Claude models: Anthropic first, then Z.AI (as Anthropic-compatible), then OpenRouter
+        // Claude models: Anthropic first, then Z.AI (with GLM conversion), then OpenRouter
         providerOrder = ["anthropic", "zai", "openrouter"];
       } else if (modelLower.startsWith("glm-")) {
-        // GLM models: Z.AI first (native GLM support), then Anthropic, then OpenRouter
+        // GLM models: Z.AI first (native GLM support), then Anthropic (with Claude conversion), then OpenRouter
         providerOrder = ["zai", "anthropic", "openrouter"];
       }
     }
@@ -374,6 +387,152 @@ export class ProviderHealth {
     }
 
     return null; // No provider available
+  }
+
+  /**
+   * Get the best provider AND model with intelligent fallback
+   * Handles model conversion when switching between providers
+   *
+   * @returns Object with provider, model to use, and whether conversion occurred
+   */
+  getBestProviderAndModel(
+    requestedModel: string | undefined
+  ): {
+    provider: "anthropic" | "zai" | "openrouter" | null;
+    model: string;
+    wasConverted: boolean;
+    conversionReason?: string;
+  } {
+    this.checkWeekRollover();
+
+    if (!requestedModel) {
+      return {
+        provider: this.getBestProviderForModel(undefined),
+        model: "claude-sonnet-4-6",
+        wasConverted: false,
+      };
+    }
+
+    const modelLower = requestedModel.toLowerCase();
+
+    // Claude models: Try Anthropic → Z.AI (with GLM conversion) → OpenRouter
+    if (modelLower.startsWith("claude-")) {
+      // Try Anthropic first with Claude model
+      if (this.isAvailable("anthropic")) {
+        return {
+          provider: "anthropic",
+          model: requestedModel,
+          wasConverted: false,
+        };
+      }
+
+      // Anthropic unavailable, try Z.AI with GLM model conversion
+      if (this.isAvailable("zai")) {
+        const glmModel = this.mapClaudeToGLM(requestedModel);
+        return {
+          provider: "zai",
+          model: glmModel,
+          wasConverted: true,
+          conversionReason: `Anthropic unavailable, converted ${requestedModel} → ${glmModel}`,
+        };
+      }
+
+      // Try OpenRouter with mapped model
+      if (this.isAvailable("openrouter")) {
+        const orModel = this.mapClaudeToOpenRouter(requestedModel);
+        return {
+          provider: "openrouter",
+          model: orModel,
+          wasConverted: true,
+          conversionReason: `Anthropic and Z.AI unavailable, converted ${requestedModel} → ${orModel}`,
+        };
+      }
+    }
+
+    // GLM models: Try Z.AI → Anthropic (with Claude conversion) → OpenRouter
+    else if (modelLower.startsWith("glm-")) {
+      // Try Z.AI first with GLM model
+      if (this.isAvailable("zai")) {
+        return {
+          provider: "zai",
+          model: requestedModel,
+          wasConverted: false,
+        };
+      }
+
+      // Z.AI unavailable, try Anthropic with Claude model conversion
+      if (this.isAvailable("anthropic")) {
+        const claudeModel = this.mapGLMToClaude(requestedModel);
+        return {
+          provider: "anthropic",
+          model: claudeModel,
+          wasConverted: true,
+          conversionReason: `Z.AI unavailable, converted ${requestedModel} → ${claudeModel}`,
+        };
+      }
+
+      // Try OpenRouter with mapped model
+      if (this.isAvailable("openrouter")) {
+        const orModel = this.mapGLMToOpenRouter(requestedModel);
+        return {
+          provider: "openrouter",
+          model: orModel,
+          wasConverted: true,
+          conversionReason: `Z.AI and Anthropic unavailable, converted ${requestedModel} → ${orModel}`,
+        };
+      }
+    }
+
+    // Other models: Use default priority without conversion
+    const provider = this.getBestProviderForModel(requestedModel);
+    return {
+      provider,
+      model: requestedModel,
+      wasConverted: false,
+    };
+  }
+
+  /**
+   * Map Claude model to equivalent GLM model
+   */
+  private mapClaudeToGLM(claudeModel: string): string {
+    const claudeLower = claudeModel.toLowerCase();
+    if (claudeLower.includes("opus")) return "glm-4";
+    if (claudeLower.includes("sonnet")) return "glm-4";
+    if (claudeLower.includes("haiku")) return "glm-3-air";
+    return "glm-4"; // Default to GLM 4
+  }
+
+  /**
+   * Map GLM model to equivalent Claude model
+   */
+  private mapGLMToClaude(glmModel: string): string {
+    const glmLower = glmModel.toLowerCase();
+    if (glmLower === "glm-4" || glmLower === "glm-4-plus") return "claude-sonnet-4-6";
+    if (glmLower.includes("-air") || glmLower.includes("-turbo")) return "claude-haiku-4-5";
+    return "claude-sonnet-4-6"; // Default to Sonnet
+  }
+
+  /**
+   * Map Claude model to OpenRouter format
+   */
+  private mapClaudeToOpenRouter(claudeModel: string): string {
+    const claudeLower = claudeModel.toLowerCase();
+    if (claudeLower.includes("sonnet")) return "anthropic/claude-sonnet-4-20250514";
+    if (claudeLower.includes("opus")) return "anthropic/claude-opus-4-20250514";
+    if (claudeLower.includes("haiku")) return "anthropic/claude-haiku-4-20250514";
+    return "anthropic/claude-sonnet-4-20250514";
+  }
+
+  /**
+   * Map GLM model to OpenRouter format
+   */
+  private mapGLMToOpenRouter(glmModel: string): string {
+    const glmLower = glmModel.toLowerCase();
+    if (glmLower === "glm-4" || glmLower === "glm-4-plus") return "glm/glm-4";
+    if (glmLower.includes("-air")) return "glm/glm-3-air";
+    if (glmLower.includes("-turbo")) return "glm/glm-3-turbo";
+    return "glm/glm-4";
   }
 
   /**

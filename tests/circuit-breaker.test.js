@@ -141,29 +141,26 @@ describe("Circuit Breaker - Auto-Swap Mechanism", () => {
     providerHealth.destroy();
   });
 
-  it("should auto-swap to Z.AI when Anthropic fails for Claude models", () => {
+  it("should auto-swap to Z.AI when Anthropic fails for Claude models (with model conversion)", () => {
     // Make Anthropic unavailable
     for (let i = 0; i < 5; i++) {
       providerHealth.recordFailure("anthropic", "other");
     }
 
     const bestProvider = providerHealth.getBestProviderForModel("claude-sonnet-4-6");
-    assert.strictEqual(bestProvider, "zai");
+    assert.strictEqual(bestProvider, "zai"); // Z.AI with GLM conversion
   });
 
-  it("should auto-swap to OpenRouter when both Anthropic and Z.AI fail", () => {
+  it("should auto-swap to Z.AI when Anthropic fails for GLM models", () => {
+    providerHealth.resetAll();
+
     // Make Anthropic unavailable
     for (let i = 0; i < 5; i++) {
       providerHealth.recordFailure("anthropic", "other");
     }
 
-    // Make Z.AI unavailable
-    for (let i = 0; i < 5; i++) {
-      providerHealth.recordFailure("zai", "other");
-    }
-
-    const bestProvider = providerHealth.getBestProviderForModel("claude-sonnet-4-6");
-    assert.strictEqual(bestProvider, "openrouter");
+    const bestProvider = providerHealth.getBestProviderForModel("glm-4");
+    assert.strictEqual(bestProvider, "zai"); // Z.AI is used for GLM models
   });
 
   it("should return null when all providers are unavailable", () => {
@@ -207,7 +204,7 @@ describe("Circuit Breaker - API Key Validation", () => {
     );
 
     const bestProvider = providerHealth.getBestProviderForModel("claude-sonnet-4-6");
-    assert.strictEqual(bestProvider, "zai"); // Should skip Anthropic
+    assert.strictEqual(bestProvider, "zai"); // Should skip Anthropic, use Z.AI with model conversion
 
     providerHealth.destroy();
   });
@@ -379,19 +376,19 @@ describe("Circuit Breaker - Fallback Chain Tests", () => {
     let provider = providerHealth.getBestProviderForModel("claude-sonnet-4-6");
     assert.strictEqual(provider, "anthropic");
 
-    // Make Anthropic fail - should switch to Z.AI
+    // Make Anthropic fail - should switch to Z.AI (with GLM conversion)
     for (let i = 0; i < 5; i++) {
       providerHealth.recordFailure("anthropic", "other");
     }
     provider = providerHealth.getBestProviderForModel("claude-sonnet-4-6");
-    assert.strictEqual(provider, "zai");
+    assert.strictEqual(provider, "zai"); // Z.AI with model conversion
 
     // Make Z.AI fail - should switch to OpenRouter
     for (let i = 0; i < 5; i++) {
       providerHealth.recordFailure("zai", "other");
     }
     provider = providerHealth.getBestProviderForModel("claude-sonnet-4-6");
-    assert.strictEqual(provider, "openrouter");
+    assert.strictEqual(provider, "openrouter"); // OpenRouter with mapped model
   });
 
   it("should fallback Z.AI → Anthropic → OpenRouter for GLM models", () => {
@@ -491,7 +488,7 @@ describe("Circuit Breaker - Weekly Quota Tracking", () => {
     providerHealth.recordTokenUsage("anthropic", 50000, 35000);
 
     const bestProvider = providerHealth.getBestProviderForModel("claude-sonnet-4-6");
-    assert.strictEqual(bestProvider, "zai"); // Should skip Anthropic
+    assert.strictEqual(bestProvider, "zai"); // Should skip Anthropic, use Z.AI with model conversion
 
     providerHealth.destroy();
   });

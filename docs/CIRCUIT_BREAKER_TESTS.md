@@ -4,6 +4,20 @@
 
 The circuit breaker implementation provides automatic failover and provider health management for the Claude Code Proxy. It ensures high availability by automatically switching to backup providers when the primary provider fails.
 
+## Provider-Model Mapping with Intelligent Conversion
+
+**NEW Feature**: The circuit breaker now includes **intelligent model conversion** when switching between providers.
+
+### Claude Models Fallback Chain
+1. **Anthropic** + Claude model (e.g., claude-sonnet-4-6)
+2. **Z.AI** + GLM model (e.g., glm-4) ← **Model conversion**
+3. **OpenRouter** + OpenRouter format (e.g., anthropic/claude-sonnet-4-20250514)
+
+### GLM Models Fallback Chain
+1. **Z.AI** + GLM model (e.g., glm-4)
+2. **Anthropic** + Claude model (e.g., claude-sonnet-4-6) ← **Model conversion**
+3. **OpenRouter** + OpenRouter format (e.g., glm/glm-4)
+
 ## Test Coverage
 
 **Total Tests**: 35 tests across 9 test suites
@@ -42,9 +56,9 @@ assert.strictEqual(providerHealth.getState("anthropic"), ProviderState.COOLING_D
 ```
 
 #### 3. Auto-Swap Mechanism (5 tests)
-Tests automatic provider selection when primary fails:
-- Claude models: Anthropic → Z.AI → OpenRouter
-- GLM models: Z.AI → Anthropic → OpenRouter
+Tests automatic provider selection with model conversion:
+- Claude models: Anthropic → Z.AI (with GLM conversion) → OpenRouter
+- GLM models: Z.AI → Anthropic (with Claude conversion) → OpenRouter
 - Returns null when all providers unavailable
 
 **Key Test**:
@@ -109,18 +123,17 @@ assert.strictEqual(metrics.averageLatency, 110);
 
 #### 7. Fallback Chain Tests (3 tests)
 Tests complete fallback scenarios:
-- Anthropic fails → Z.AI → OpenRouter (for Claude models)
+- Anthropic fails → OpenRouter (for Claude models, Z.AI excluded)
 - Z.AI fails → Anthropic → OpenRouter (for GLM models)
 - DEGRADED provider recovers and becomes preferred again
 
 **Key Test**:
 ```javascript
-// Full fallback chain for Claude model
+// Fallback chain for Claude model (Z.AI excluded)
 provider = providerHealth.getBestProviderForModel("claude-sonnet-4-6");
 assert.strictEqual(provider, "anthropic"); // Start
 
-// Make Anthropic fail → switch to Z.AI
-// Make Z.AI fail → switch to OpenRouter
+// Make Anthropic fail → switch to OpenRouter (NOT Z.AI)
 assert.strictEqual(provider, "openrouter"); // End of chain
 ```
 
@@ -212,23 +225,47 @@ HEALTHY
 
 ## Auto-Swap Logic
 
-### Claude Models (claude-*)
+### Claude Models (claude-*) with Model Conversion
 ```javascript
-getBestProviderForModel("claude-sonnet-4-6")
-// Priority: Anthropic (1) → Z.AI (2) → OpenRouter (3)
+// Primary choice
+getBestProviderAndModel("claude-sonnet-4-6")
+// Returns: { provider: "anthropic", model: "claude-sonnet-4-6", wasConverted: false }
+
+// Fallback 1: Anthropic fails → Z.AI with GLM conversion
+getBestProviderAndModel("claude-sonnet-4-6")
+// Returns: { provider: "zai", model: "glm-4", wasConverted: true,
+//            conversionReason: "Anthropic unavailable, converted claude-sonnet-4-6 → glm-4" }
+
+// Fallback 2: Both fail → OpenRouter with OpenRouter format
+getBestProviderAndModel("claude-sonnet-4-6")
+// Returns: { provider: "openrouter", model: "anthropic/claude-sonnet-4-20250514",
+//            wasConverted: true }
 ```
 
-### GLM Models (glm-*)
+**Model Mappings**:
+- claude-sonnet-4-6 → glm-4 → anthropic/claude-sonnet-4-20250514
+- claude-opus-4-5 → glm-4 → anthropic/claude-opus-4-20250514
+- claude-haiku-4-5 → glm-3-air → anthropic/claude-haiku-4-20250514
+
+### GLM Models (glm-*) with Model Conversion
 ```javascript
-getBestProviderForModel("glm-4")
-// Priority: Z.AI (1) → Anthropic (2) → OpenRouter (3)
+// Primary choice
+getBestProviderAndModel("glm-4")
+// Returns: { provider: "zai", model: "glm-4", wasConverted: false }
+
+// Fallback 1: Z.AI fails → Anthropic with Claude conversion
+getBestProviderAndModel("glm-4")
+// Returns: { provider: "anthropic", model: "claude-sonnet-4-6", wasConverted: true,
+//            conversionReason: "Z.AI unavailable, converted glm-4 → claude-sonnet-4-6" }
+
+// Fallback 2: Both fail → OpenRouter with OpenRouter format
+getBestProviderAndModel("glm-4")
+// Returns: { provider: "openrouter", model: "glm/glm-4", wasConverted: true }
 ```
 
-### Unknown Models
-```javascript
-getBestProviderForModel("unknown-model")
-// Priority: Anthropic (1) → Z.AI (2) → OpenRouter (3)
-```
+**Model Mappings**:
+- glm-4 → claude-sonnet-4-6 → glm/glm-4
+- glm-3-air → claude-haiku-4-5 → glm/glm-3-air
 
 ## Usage in Production
 
