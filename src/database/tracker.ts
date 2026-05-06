@@ -13,6 +13,7 @@ const { Pool } = pg;
 export class UsageTracker {
   private pool: pg.Pool;
   private isEnabled: boolean;
+  private lastConnectionErrorLog: number = 0;
 
   constructor(databaseConfig?: {
     host: string;
@@ -133,9 +134,17 @@ export class UsageTracker {
 
       // Fix existing daily_usage table if it has old schema
       await this.fixDailyUsageSchema();
-    } catch (error) {
+    } catch (error: any) {
+      // Database initialization failure should not break the proxy
+      if (error.code === 'ECONNREFUSED' || error.code === 'CONNECTION_ERROR') {
+        console.warn("⚠️  Database unavailable - usage tracking disabled (proxy still works)");
+        console.warn("   To fix: Start PostgreSQL or set DATABASE_URL correctly");
+        console.warn("   Or disable tracking by removing database config");
+        this.isEnabled = false; // Disable tracking
+        return;
+      }
       console.error("❌ Failed to initialize database tables:", error);
-      throw error;
+      // Don't throw - let the proxy continue without tracking
     }
   }
 
@@ -234,7 +243,19 @@ export class UsageTracker {
       });
 
       return requestId;
-    } catch (error) {
+    } catch (error: any) {
+      // Database connection errors should not break the proxy
+      if (error.code === 'ECONNREFUSED' || error.code === 'CONNECTION_ERROR') {
+        // Only log once per minute to avoid spam
+        const now = Date.now();
+        if (!this.lastConnectionErrorLog || now - this.lastConnectionErrorLog > 60000) {
+          console.warn("⚠️  Database unavailable - usage tracking disabled (proxy still works)");
+          console.warn("   To fix: Start PostgreSQL or set DATABASE_URL correctly");
+          console.warn("   Or disable tracking by setting ENABLE_USAGE_TRACKING=false");
+          this.lastConnectionErrorLog = now;
+        }
+        return null;
+      }
       console.error("Failed to track request:", error);
       return null;
     }
