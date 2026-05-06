@@ -89,7 +89,7 @@ describe("Model Conversion - Claude Models", () => {
     const result = providerHealth.getBestProviderAndModel("claude-sonnet-4-6");
 
     assert.strictEqual(result.provider, "openrouter");
-    assert.strictEqual(result.model, "anthropic/claude-sonnet-4-20250514");
+    assert.strictEqual(result.model, "~anthropic/claude-sonnet-latest");
     assert.strictEqual(result.wasConverted, true);
     assert.ok(result.conversionReason?.includes("unavailable"));
     assert.ok(result.conversionReason?.includes("converted"));
@@ -105,7 +105,7 @@ describe("Model Conversion - Claude Models", () => {
     const result = providerHealth.getBestProviderAndModel("claude-opus-4-5");
 
     assert.strictEqual(result.provider, "openrouter");
-    assert.strictEqual(result.model, "anthropic/claude-opus-4-20250514");
+    assert.strictEqual(result.model, "~anthropic/claude-sonnet-latest");
   });
 
   it("should map Claude Haiku to OpenRouter format", () => {
@@ -118,7 +118,7 @@ describe("Model Conversion - Claude Models", () => {
     const result = providerHealth.getBestProviderAndModel("claude-haiku-4-5");
 
     assert.strictEqual(result.provider, "openrouter");
-    assert.strictEqual(result.model, "anthropic/claude-haiku-4-20250514");
+    assert.strictEqual(result.model, "~anthropic/claude-haiku-latest");
   });
 });
 
@@ -246,7 +246,7 @@ describe("Model Conversion - Complete Fallback Chain", () => {
     }
     result = providerHealth.getBestProviderAndModel("claude-sonnet-4-6");
     assert.strictEqual(result.provider, "openrouter");
-    assert.strictEqual(result.model, "anthropic/claude-sonnet-4-20250514");
+    assert.strictEqual(result.model, "~anthropic/claude-sonnet-latest");
     assert.strictEqual(result.wasConverted, true);
   });
 

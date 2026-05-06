@@ -518,10 +518,8 @@ export class ProviderHealth {
    */
   private mapClaudeToOpenRouter(claudeModel: string): string {
     const claudeLower = claudeModel.toLowerCase();
-    if (claudeLower.includes("sonnet")) return "anthropic/claude-sonnet-4-20250514";
-    if (claudeLower.includes("opus")) return "anthropic/claude-opus-4-20250514";
-    if (claudeLower.includes("haiku")) return "anthropic/claude-haiku-4-20250514";
-    return "anthropic/claude-sonnet-4-20250514";
+    if (claudeLower.includes("haiku")) return "~anthropic/claude-haiku-latest";
+    return "~anthropic/claude-sonnet-latest";
   }
 
   /**

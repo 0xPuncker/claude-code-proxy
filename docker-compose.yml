@@ -6,9 +6,9 @@ services:
       dockerfile: Dockerfile
     container_name: ${PROXY_CONTAINER_NAME:-cc-proxy}
     ports:
-      - "${PROXY_PORT:-4181}:4181"
+      - "${HOST_PROXY_PORT:-4181}:4181"
     env_file:
-      - .env
+      - ${PROXY_ENV_FILE:-.env.docker}
     environment:
       - API_TIMEOUT_MS=${API_TIMEOUT_MS:-18000000}
       - API_STREAMING_TIMEOUT_MS=${API_STREAMING_TIMEOUT_MS:-18000000}
@@ -23,7 +23,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "wget -qO- http://localhost:${PROXY_PORT:-4181}/health || exit 1",
+              "wget -qO- http://127.0.0.1:4181/health || exit 1",
         ]
       interval: ${PROXY_HEALTHCHECK_INTERVAL:-30s}
       timeout: ${PROXY_HEALTHCHECK_TIMEOUT:-5s}
@@ -32,9 +32,6 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    extra_hosts:
-      - "claude.ai:160.79.104.10"
-      - "api.claude.ai:160.79.104.10"
     depends_on:
       cc-db:
         condition: service_healthy

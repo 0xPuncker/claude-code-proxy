@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const PROXY_PORT = process.env.PROXY_PORT || '4181';
+const PROXY_PORT = process.env.HOST_PROXY_PORT || process.env.PROXY_PORT || '4181';
 const PROXY_URL = `http://127.0.0.1:${PROXY_PORT}`;
 
 // Paths

@@ -9,6 +9,42 @@ import { ProxyConfig, RequestOptions, HttpResponse, LogLevel, RequestMetrics } f
 import { UsageTracker } from "./database/tracker.js";
 import { ProviderHealth } from "./provider-health.js";
 
+function loadEnvFile(filePath = path.join(process.cwd(), ".env")): void {
+  if (!fs.existsSync(filePath)) return;
+
+  const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    const separatorIndex = trimmed.indexOf("=");
+    if (separatorIndex <= 0) continue;
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    let value = trimmed.slice(separatorIndex + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
+
+function resolveHomePath(filePath: string): string {
+  if (filePath === "~") return os.homedir();
+  if (filePath.startsWith("~/") || filePath.startsWith("~\\")) {
+    return path.join(os.homedir(), filePath.slice(2));
+  }
+  return filePath;
+}
+
+loadEnvFile();
+
 /**
  * Default configuration for the proxy server
  */
@@ -16,23 +52,25 @@ const DEFAULT_CONFIG: ProxyConfig = {
   port: parseInt(process.env.PROXY_PORT || "4181", 10),
   // Primary: Anthropic API (Claude models)
   anthropic: {
-    baseUrl: "https://api.anthropic.com",
+    baseUrl: process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com",
     apiKey: process.env.ANTHROPIC_API_KEY || "",
   },
   // Secondary: Z.AI API (GLM models)
   zai: {
-    baseUrl: "https://api.z.ai/api/anthropic",
+    baseUrl: process.env.ZAI_BASE_URL || "https://api.z.ai/api/anthropic",
     apiKey: process.env.ZAI_API_KEY || "",
   },
   // Fallback: OpenRouter (free models)
   openrouter: {
-    baseUrl: "https://openrouter.ai/api/v1",
+    baseUrl: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
     apiKey: process.env.OPENROUTER_API_KEY || "",
   },
   claudeSubscription: {
-    baseUrl: "https://api.claude.ai/api",
-    credentialsPath: process.env.CLAUDE_CREDENTIALS_PATH ||
-      path.join(os.homedir(), ".claude", ".credentials.json"),
+    baseUrl: process.env.CLAUDE_SUBSCRIPTION_BASE_URL || "https://api.anthropic.com",
+    credentialsPath: resolveHomePath(
+      process.env.CLAUDE_CREDENTIALS_PATH ||
+      path.join(os.homedir(), ".claude", ".credentials.json")
+    ),
     enabled: process.env.CLAUDE_SUBSCRIPTION_ENABLED !== "false",
   },
   modelFallbackMap: {
@@ -63,7 +101,7 @@ const DEFAULT_CONFIG: ProxyConfig = {
     // Fallback to OpenRouter free models (when others fail)
     "openrouter-free": "google/gemma-3-27b-it:free",
   },
-  fallbackOnCodes: [429, 503, 502],
+  fallbackOnCodes: [429, 503, 502, 530],
   logLevel: "info",
   timeout: {
     requestMs: parseInt(process.env.API_TIMEOUT_MS || "300000", 10),      // 5 minutes default
@@ -290,15 +328,18 @@ export class ClaudeCodeProxy {
         if (freshToken && freshToken !== oauthToken) subRes = await tryRequest(freshToken);
       }
 
-      if (!this.config.fallbackOnCodes.includes(subRes.status)) {
-        if (subRes.status >= 400) {
-          this.logger.error(`← Claude subscription ❌ ${subRes.status}: ${subRes.body.toString().slice(0, 300)}`);
-        } else {
-          this.logger.ok(`← Claude subscription ${subRes.status}`);
-        }
+      if (subRes.status < 400) {
+        this.logger.ok(`← Claude subscription ${subRes.status}`);
         return subRes;
       }
-      this.logger.warn(`← Claude subscription ⚠️  ${subRes.status} — trying next provider`);
+
+      const details = subRes.body.toString().slice(0, 300);
+      const message = `← Claude subscription ❌ ${subRes.status}: ${details} — trying next provider`;
+      if (this.config.fallbackOnCodes.includes(subRes.status)) {
+        this.logger.warn(message);
+      } else {
+        this.logger.error(message);
+      }
       return undefined;
     } catch (err) {
       this.logger.error(`← Claude subscription ❌ ${err instanceof Error ? err.message : "Unknown"} — fallback`);
@@ -349,9 +390,14 @@ export class ClaudeCodeProxy {
   /**
    * Perform HTTP/HTTPS request with timeout and retry logic
    */
-  private async httpRequest(url: string, options: RequestOptions, timeoutMs?: number): Promise<HttpResponse> {
+  private async httpRequest(
+    url: string,
+    options: RequestOptions,
+    timeoutMs?: number,
+    maxRetriesOverride?: number
+  ): Promise<HttpResponse> {
     const timeout = timeoutMs || this.config.timeout?.requestMs || 300000; // 5 minutes default
-    const maxRetries = this.config.timeout?.maxRetries || 3;
+    const maxRetries = maxRetriesOverride ?? this.config.timeout?.maxRetries ?? 3;
     const retryDelay = this.config.timeout?.retryDelayMs || 1000;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -399,15 +445,19 @@ export class ClaudeCodeProxy {
         parsedUrl,
         { method: options.method || "GET", headers: options.headers || {} },
         (res) => {
-          clearTimeout(timeout);
           const chunks: Buffer[] = [];
           res.on("data", (chunk: Buffer) => chunks.push(chunk));
           res.on("end", () => {
+            clearTimeout(timeout);
             resolve({
               status: res.statusCode || 200,
               headers: res.headers as Record<string, string>,
               body: Buffer.concat(chunks),
             });
+          });
+          res.on("error", (err) => {
+            clearTimeout(timeout);
+            reject(err);
           });
         }
       );
@@ -434,16 +484,16 @@ export class ClaudeCodeProxy {
     }
 
     const openRouterModels: Record<string, string> = {
-      "claude-sonnet-4-6": "anthropic/claude-sonnet-4.6",
-      "claude-opus-4-6": "anthropic/claude-opus-4.6",
-      "claude-haiku-4-5-20251001": "anthropic/claude-haiku-4.5",
-      "claude-sonnet-4-5": "anthropic/claude-sonnet-4.5",
-      "claude-opus": "anthropic/claude-opus-4.6",
-      "claude-sonnet": "anthropic/claude-sonnet-4.6",
-      "claude-haiku": "anthropic/claude-haiku-4.5",
+      "claude-sonnet-4-6": "~anthropic/claude-sonnet-latest",
+      "claude-opus-4-6": "~anthropic/claude-sonnet-latest",
+      "claude-haiku-4-5-20251001": "~anthropic/claude-haiku-latest",
+      "claude-sonnet-4-5": "~anthropic/claude-sonnet-latest",
+      "claude-opus": "~anthropic/claude-sonnet-latest",
+      "claude-sonnet": "~anthropic/claude-sonnet-latest",
+      "claude-haiku": "~anthropic/claude-haiku-latest",
       "openrouter-free":
         this.config.modelFallbackMap["openrouter-free"] ||
-        "google/gemma-3-27b-it:free",
+        "openrouter/auto",
     };
 
     if (openRouterModels[model]) {
@@ -522,6 +572,74 @@ export class ClaudeCodeProxy {
     }
   }
 
+  private normalizeOpenRouterResponse(response: HttpResponse): HttpResponse {
+    try {
+      const raw = JSON.parse(response.body.toString());
+      if (raw?.type !== "message" || raw?.role !== "assistant") return response;
+
+      const content = Array.isArray(raw.content)
+        ? raw.content
+          .map((block: any) => {
+            if (block?.type === "text") {
+              return { type: "text", text: String(block.text || "") };
+            }
+            if (block?.type === "tool_use") {
+              return {
+                type: "tool_use",
+                id: String(block.id || ""),
+                name: String(block.name || ""),
+                input: block.input && typeof block.input === "object" ? block.input : {},
+              };
+            }
+            return undefined;
+          })
+          .filter(Boolean)
+        : typeof raw.content === "string"
+          ? [{ type: "text", text: raw.content }]
+          : [];
+
+      const usage = raw.usage && typeof raw.usage === "object" ? raw.usage : {};
+      const normalized = {
+        id: String(raw.id || `msg_${Date.now()}`),
+        type: "message",
+        role: "assistant",
+        content,
+        model: String(raw.model || "openrouter"),
+        stop_reason: typeof raw.stop_reason === "string" ? raw.stop_reason : "end_turn",
+        stop_sequence: raw.stop_sequence ?? null,
+        usage: {
+          input_tokens: Number.isFinite(usage.input_tokens) ? usage.input_tokens : 0,
+          output_tokens: Number.isFinite(usage.output_tokens) ? usage.output_tokens : 0,
+          cache_creation_input_tokens: Number.isFinite(usage.cache_creation_input_tokens)
+            ? usage.cache_creation_input_tokens
+            : 0,
+          cache_read_input_tokens: Number.isFinite(usage.cache_read_input_tokens)
+            ? usage.cache_read_input_tokens
+            : 0,
+        },
+      };
+
+      const body = Buffer.from(JSON.stringify(normalized));
+      const headers = { ...response.headers };
+      delete headers["transfer-encoding"];
+      delete headers["content-encoding"];
+      headers["content-type"] = "application/json";
+      headers["content-length"] = body.length.toString();
+
+      return { ...response, headers, body };
+    } catch {
+      return response;
+    }
+  }
+
+  private async readIncomingBody(res: IncomingMessage): Promise<Buffer> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of res) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+
   /**
    * Clean URL path to remove query parameters
    */
@@ -588,6 +706,53 @@ export class ClaudeCodeProxy {
   /**
    * Clean and validate request body for Anthropic API compatibility
    */
+  private cleanMessages(
+    messages: unknown,
+    provider: "anthropic" | "zai" | "openrouter" | "subscription"
+  ): unknown {
+    if (!Array.isArray(messages)) return messages;
+
+    let removedThinkingBlocks = 0;
+    const shouldStripMessageThinking = provider === "subscription";
+
+    const cleanedMessages = messages
+      .map((message) => {
+        if (!message || typeof message !== "object" || Array.isArray(message)) return message;
+
+        const cleanedMessage = { ...(message as Record<string, unknown>) };
+        const content = cleanedMessage.content;
+
+        if (shouldStripMessageThinking && Array.isArray(content)) {
+          const filteredContent = content.filter((block) => {
+            if (!block || typeof block !== "object" || Array.isArray(block)) return true;
+
+            const type = (block as Record<string, unknown>).type;
+            if (type === "thinking" || type === "redacted_thinking") {
+              removedThinkingBlocks++;
+              return false;
+            }
+
+            return true;
+          });
+
+          if (filteredContent.length === 0 && cleanedMessage.role === "assistant") {
+            return undefined;
+          }
+
+          cleanedMessage.content = filteredContent;
+        }
+
+        return cleanedMessage;
+      })
+      .filter(Boolean);
+
+    if (removedThinkingBlocks > 0) {
+      this.logger.debug(`  stripped ${removedThinkingBlocks} historical thinking block(s) for ${provider}`);
+    }
+
+    return cleanedMessages;
+  }
+
   private cleanBody(
     bodyStr: string,
     provider: "anthropic" | "zai" | "openrouter" | "subscription" = "anthropic"
@@ -603,6 +768,10 @@ export class ClaudeCodeProxy {
       const cleaned: Record<string, unknown> = {};
       for (const field of allowedFields) {
         if (body[field] !== undefined) cleaned[field] = body[field];
+      }
+
+      if (cleaned.messages !== undefined) {
+        cleaned.messages = this.cleanMessages(cleaned.messages, provider);
       }
 
       // Remap model if present
@@ -750,13 +919,23 @@ export class ClaudeCodeProxy {
     const url = `${config.baseUrl}${normalizedPath}`;
     const headers = this.buildProviderHeaders(provider, reqHeaders);
     const body = this.cleanBody(reqBody, provider);
+    const timeoutMs = provider === "openrouter"
+      ? parseInt(process.env.OPENROUTER_TIMEOUT_MS || "60000", 10)
+      : undefined;
+    const maxRetries = provider === "openrouter"
+      ? parseInt(process.env.OPENROUTER_MAX_RETRIES || "0", 10)
+      : undefined;
     headers["content-length"] = Buffer.byteLength(body).toString();
 
-    const response = await this.httpRequest(url, {
+    let response = await this.httpRequest(url, {
       method: reqMethod,
       headers,
       body
-    });
+    }, timeoutMs, maxRetries);
+
+    if (provider === "openrouter" && response.status < 400) {
+      response = this.normalizeOpenRouterResponse(response);
+    }
 
     // Detect error types
     let errorType: 'rate_limit' | 'context_window' | 'other' | undefined;
@@ -788,8 +967,9 @@ export class ClaudeCodeProxy {
     const requestId = this.generateRequestId();
     const cbEnabled = this.config.circuitBreaker?.enabled !== false;
 
-    // Determine best provider based on model (circuit breaker enabled)
-    let selectedProvider = cbEnabled ? this.providerHealth.getBestProviderForModel(model) : 'anthropic';
+    // Determine best provider+model (circuit breaker enabled)
+    const providerAndModel = cbEnabled ? this.providerHealth.getBestProviderAndModel(model) : null;
+    let selectedProvider: 'anthropic' | 'zai' | 'openrouter' | null = providerAndModel?.provider ?? 'anthropic';
 
     // Default to Anthropic if circuit breaker is disabled or no provider selected
     if (!selectedProvider) {
@@ -797,13 +977,25 @@ export class ClaudeCodeProxy {
       selectedProvider = 'anthropic';
     }
 
+    // Apply model conversion if provider selected a different model
+    let effectiveReqBody = reqBody;
+    const effectiveModel = providerAndModel?.model ?? model;
+    if (providerAndModel?.wasConverted && effectiveModel && effectiveModel !== model) {
+      try {
+        const parsed = JSON.parse(reqBody);
+        parsed.model = effectiveModel;
+        effectiveReqBody = JSON.stringify(parsed);
+        this.logger.debug(`  model conversion: ${model} → ${effectiveModel} (${selectedProvider})`);
+      } catch { /* keep original body */ }
+    }
+
     const primaryProvider = selectedProvider;
-    this.logger.info(`[${requestId}] → ${this.formatRequestLog(primaryProvider, model, false, 'sending')}`);
+    this.logger.info(`[${requestId}] → ${this.formatRequestLog(primaryProvider, effectiveModel ?? model, false, 'sending')}`);
 
     try {
       const { response, errorType } = await this.requestProvider(
         primaryProvider,
-        reqBody,
+        effectiveReqBody,
         reqHeaders,
         reqPath,
         reqMethod
@@ -1127,12 +1319,11 @@ export class ClaudeCodeProxy {
             this.providerHealth.recordFailure(provider, errorType);
           }
 
-          // Send error response to client
-          if (!clientRes.headersSent) {
-            clientRes.writeHead(statusCode, { "Content-Type": "application/json" });
-            clientRes.end(errorBody);
-            headersSent = true;
-          }
+          this.logger.warn(
+            `[${requestId}] ← ⚠️  ${provider.toUpperCase()} ${statusCode}: ${errorBody
+              .toString()
+              .slice(0, 300)} — trying fallback`
+          );
 
           return { success: false, statusCode, errorType };
         }
@@ -1212,7 +1403,7 @@ export class ClaudeCodeProxy {
 
     // Primary failed — try Claude subscription (streaming)
     const cleanedPath = this.cleanPath(reqPath);
-    const cleanedBody = this.cleanBody(reqBody);
+    const cleanedBody = this.cleanBody(reqBody, "subscription");
 
     if (this.config.claudeSubscription.enabled) {
       const oauthToken = await this.readClaudeOAuthToken();
@@ -1231,41 +1422,56 @@ export class ClaudeCodeProxy {
 
         this.logger.info(`→ Claude subscription (stream) ${reqMethod} ${cleanedPath}`);
         try {
-          let subRes = await trySubscriptionStream(oauthToken);
+          let subRes: IncomingMessage | undefined = await trySubscriptionStream(oauthToken);
 
           if (subRes.statusCode === 401) {
             this.logger.warn("← Claude subscription 401 — re-reading credentials and retrying");
-            subRes.resume();
+            await this.readIncomingBody(subRes);
             const freshToken = await this.readClaudeOAuthToken();
             if (freshToken && freshToken !== oauthToken) subRes = await trySubscriptionStream(freshToken);
+            else {
+              this.logger.error("← Claude subscription ❌ 401 — trying other provider");
+              subRes = undefined;
+            }
           }
 
-          if (!this.config.fallbackOnCodes.includes(subRes.statusCode!)) {
-            this.logger.ok(`← Claude subscription (stream) ${subRes.statusCode}`);
-            if (!clientRes.headersSent) {
-              clientRes.writeHead(subRes.statusCode!, subRes.headers);
-              headersSent = true;
+          if (subRes) {
+            const subStatus = subRes.statusCode || 0;
+            if (subStatus > 0 && subStatus < 400) {
+              this.logger.ok(`← Claude subscription (stream) ${subRes.statusCode}`);
+              if (!clientRes.headersSent) {
+                clientRes.writeHead(subRes.statusCode!, subRes.headers);
+                headersSent = true;
+              }
+              subRes.on('data', (chunk) => {
+                try {
+                  streamingChunks.push(chunk.toString());
+                  clientRes.write(chunk);
+                } catch (writeErr) {
+                  this.logger.debug(`Error writing subscription response: ${writeErr instanceof Error ? writeErr.message : 'Unknown'}`);
+                }
+              });
+              subRes.on('end', async () => {
+                try {
+                  clientRes.end();
+                  await this.trackStreamingRequestMetrics(reqMethod, reqPath, startTime, subStatus, true, 'anthropic', model, streamingChunks);
+                } catch (endErr) {
+                  this.logger.debug(`Error in subscription end handler: ${endErr instanceof Error ? endErr.message : 'Unknown'}`);
+                }
+              });
+              return;
             }
-            subRes.on('data', (chunk) => {
-              try {
-                streamingChunks.push(chunk.toString());
-                clientRes.write(chunk);
-              } catch (writeErr) {
-                this.logger.debug(`Error writing subscription response: ${writeErr instanceof Error ? writeErr.message : 'Unknown'}`);
-              }
-            });
-            subRes.on('end', async () => {
-              try {
-                clientRes.end();
-                await this.trackStreamingRequestMetrics(reqMethod, reqPath, startTime, subRes.statusCode!, true, 'anthropic', model, streamingChunks);
-              } catch (endErr) {
-                this.logger.debug(`Error in subscription end handler: ${endErr instanceof Error ? endErr.message : 'Unknown'}`);
-              }
-            });
-            return;
+
+            const subErrorBody = await this.readIncomingBody(subRes);
+            const subMessage = `← Claude subscription ❌ ${subStatus}: ${subErrorBody
+              .toString()
+              .slice(0, 300)} — trying other provider`;
+            if (this.config.fallbackOnCodes.includes(subStatus)) {
+              this.logger.warn(subMessage);
+            } else {
+              this.logger.error(subMessage);
+            }
           }
-          subRes.resume();
-          this.logger.warn(`← Claude subscription ⚠️  ${subRes.statusCode} — trying other provider`);
         } catch (err) {
           this.logger.error(`← Claude subscription ❌ stream error: ${err instanceof Error ? err.message : "Unknown"}`);
         }
