@@ -41,12 +41,17 @@ jobs:
   release:
     needs: test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: |
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push' &&
+      !startsWith(github.event.head_commit.message, 'chore: bump version')
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -65,11 +70,45 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
 
+      - name: Bump version and create tag
+        id: version_bump
+        run: |
+          # Get current version from package.json
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          echo "Current version: $CURRENT_VERSION"
+
+          # Split version into components
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+
+          # Increment patch version
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+
+          echo "New version: $NEW_VERSION"
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+          # Update package.json with new version
+          npm version $NEW_VERSION --no-git-tag-version
+
+          # Commit the version bump
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore: bump version to ${NEW_VERSION}"
+          git push
+
+          # Create and push tag
+          git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}"
+          git push origin "v${NEW_VERSION}"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.0.0-ci.${{ github.run_number }}.${{ github.run_attempt }}
-          name: Release ${{ github.run_number }}.${{ github.run_attempt }}
+          tag_name: v${{ steps.version_bump.outputs.version }}
+          name: Release v${{ steps.version_bump.outputs.version }}
           body: |
             Automated release from CI/CD pipeline
+
+            ## Changes in this release
+            See commit history for details.
           generate_release_notes: true
