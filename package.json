@@ -17,6 +17,7 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:migrate:reset": "prisma migrate reset",
     "prisma:studio": "prisma studio",
+    "prisma:studio:setup": "powershell -ExecutionPolicy Bypass -File scripts/setup-prisma-studio.ps1",
     "prisma:seed": "prisma db seed",
     "db:migrate": "node dist/database/migrate.js",
     "db:seed": "node dist/database/seed.js",
@@ -52,17 +53,17 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@prisma/client": "^7.7.0",
     "pg": "^8.11.3"
   },
   "devDependencies": {
+    "@prisma/client": "^6.19.3",
     "@types/node": "^20.11.0",
     "@types/pg": "^8.10.9",
     "@typescript-eslint/eslint-plugin": "^8.58.2",
     "@typescript-eslint/parser": "^8.58.2",
     "eslint": "^8.57.1",
     "prettier": "^3.2.0",
-    "prisma": "^7.7.0",
+    "prisma": "^6.19.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
   },
