@@ -87,8 +87,8 @@ function addProxyConfig(settings) {
     settings.env = {};
   }
 
-  // Set the proxy URL
-  settings.env.ANTHROPIC_API_URL = PROXY_URL;
+  // Set the proxy URL — ANTHROPIC_BASE_URL is what the Anthropic SDK reads
+  settings.env.ANTHROPIC_BASE_URL = PROXY_URL;
 
   return settings;
 }
