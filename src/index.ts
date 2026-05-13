@@ -106,7 +106,7 @@ const DEFAULT_CONFIG: ProxyConfig = {
     "openrouter-free": "google/gemma-3-27b-it:free",
   },
   fallbackOnCodes: [429, 503, 502, 530],
-  logLevel: "info",
+  logLevel: (process.env.LOG_LEVEL || "info") as ProxyConfig['logLevel'],
   timeout: {
     requestMs: parseInt(process.env.API_TIMEOUT_MS || "300000", 10),      // 5 minutes default
     streamingMs: parseInt(process.env.API_STREAMING_TIMEOUT_MS || "600000", 10), // 10 minutes default
