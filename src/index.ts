@@ -4,10 +4,14 @@ import https from "node:https";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { ProxyConfig, RequestOptions, HttpResponse, LogLevel, RequestMetrics } from "./types.js";
 import { UsageTracker } from "./database/tracker.js";
 import { ProviderHealth } from "./provider-health.js";
+
+const _pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "../package.json");
+const PROXY_VERSION: string = JSON.parse(fs.readFileSync(_pkgPath, "utf-8")).version ?? "0.0.0";
 
 function loadEnvFile(filePath = path.join(process.cwd(), ".env")): void {
   if (!fs.existsSync(filePath)) return;
@@ -1640,7 +1644,7 @@ export class ClaudeCodeProxy {
       clientRes.end(JSON.stringify({
         status: "healthy",
         service: "Claude Code Proxy",
-        version: "1.0.0",
+        version: PROXY_VERSION,
         uptime: process.uptime(),
         timestamp: new Date().toISOString(),
         endpoints: {
@@ -2016,7 +2020,7 @@ es.onerror = () => {
     console.log(`  ├─ Status: \x1b[32m● Running\x1b[0m`);
     console.log(`  ├─ Port: ${port}`);
     console.log(`  ├─ URL: \x1b[36mhttp://127.0.0.1:${port}\x1b[0m`);
-    console.log(`  ├─ Version: 1.0.0`);
+    console.log(`  ├─ Version: ${PROXY_VERSION}`);
     console.log(`  └─ Node.js: ${process.version}`);
     console.log('');
 
