@@ -15,6 +15,7 @@ COPY src ./src
 
 # Copy Prisma files
 COPY prisma ./prisma
+COPY prisma.config.ts ./
 
 # Set environment variable for build (dummy URL for client generation)
 ENV DATABASE_URL="postgresql://postgres:postgres@localhost:5432/claude_proxy"
