@@ -1833,7 +1833,12 @@ export class ClaudeCodeProxy {
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
         "Access-Control-Allow-Origin": "*",
+        "X-Accel-Buffering": "no",
       });
+      // Disable Nagle's algorithm so each SSE event is sent immediately
+      clientRes.socket?.setNoDelay(true);
+      // Flush response headers to the client right away
+      clientRes.flushHeaders();
 
       // Replay last 100 entries so the client has immediate context
       for (const entry of this.logger.getRecentLogs(100)) {
@@ -2198,6 +2203,10 @@ es.onerror = () => {
 
 // Start server if run directly
 if (import.meta.url === `file://${process.argv[1]}`) {
+  // Force unbuffered stdout/stderr so Docker log drivers receive output immediately
+  (process.stdout as NodeJS.WriteStream & { _handle?: { setBlocking(b: boolean): void } })._handle?.setBlocking(true);
+  (process.stderr as NodeJS.WriteStream & { _handle?: { setBlocking(b: boolean): void } })._handle?.setBlocking(true);
+
   const proxy = new ClaudeCodeProxy();
   proxy.start().catch(error => {
     console.error("Failed to start server:", error);
