@@ -280,6 +280,23 @@ export class ClaudeCodeProxy {
   /**
    * Format provider and model info for logging
    */
+  private debugRequestDetails(reqBody: string): string {
+    try {
+      const b = JSON.parse(reqBody);
+      const parts: string[] = [];
+      if (b.model) parts.push(`model=${b.model}`);
+      if (b.max_tokens) parts.push(`max_tokens=${b.max_tokens}`);
+      const msgCount = Array.isArray(b.messages) ? b.messages.length : 0;
+      parts.push(`messages=${msgCount}`);
+      if (b.system) parts.push('system=yes');
+      if (b.stream) parts.push('stream=true');
+      if (b.thinking?.type === 'enabled') parts.push(`thinking=${b.thinking.budget_tokens}`);
+      return parts.join(' | ');
+    } catch {
+      return '(unparseable body)';
+    }
+  }
+
   private formatRequestLog(provider: string, model: string | undefined, isStreaming: boolean, status: string = 'sending'): string {
     // Map internal provider names to user-friendly display names with icons
     const providerDisplayNames: Record<string, string> = {
@@ -1024,6 +1041,7 @@ export class ClaudeCodeProxy {
 
     const primaryProvider = selectedProvider;
     this.logger.info(`[${requestId}] → ${this.formatRequestLog(primaryProvider, effectiveModel ?? model, false, 'sending')}`);
+    this.logger.debug(`[${requestId}]   ${this.debugRequestDetails(reqBody)}`);
 
     try {
       const { response, errorType } = await this.requestProvider(
@@ -1302,6 +1320,7 @@ export class ClaudeCodeProxy {
       headers["content-length"] = Buffer.byteLength(body).toString();
 
       this.logger.info(`[${requestId}] → ${this.formatRequestLog(provider, model, true, 'streaming')}`);
+      this.logger.debug(`[${requestId}]   ${this.debugRequestDetails(reqBody)}`);
 
       try {
         const res = await new Promise<IncomingMessage>((resolve, reject) => {
