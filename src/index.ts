@@ -136,6 +136,9 @@ const DEFAULT_CONFIG: ProxyConfig = {
  */
 class Logger {
   private level: LogLevel;
+  private buffer: Array<{ timestamp: string; level: string; message: string }> = [];
+  private readonly bufferSize = 500;
+  private subscribers: Set<ServerResponse> = new Set();
 
   constructor(level: string = "info") {
     this.level = this.parseLevel(level);
@@ -157,6 +160,24 @@ class Logger {
 
     const ts = new Date().toISOString().slice(11, 19);
     console.log(`${color}[${ts}] [${levelStr.toUpperCase()}] ${msg}\x1b[0m`);
+
+    const entry = { timestamp: new Date().toISOString(), level: levelStr, message: msg };
+    this.buffer.push(entry);
+    if (this.buffer.length > this.bufferSize) this.buffer.shift();
+
+    const line = `data: ${JSON.stringify(entry)}\n\n`;
+    for (const res of this.subscribers) {
+      try { res.write(line); } catch { this.subscribers.delete(res); }
+    }
+  }
+
+  getRecentLogs(limit = 200): Array<{ timestamp: string; level: string; message: string }> {
+    return this.buffer.slice(-limit);
+  }
+
+  subscribe(res: ServerResponse): () => void {
+    this.subscribers.add(res);
+    return () => this.subscribers.delete(res);
   }
 
   debug(msg: string): void {
@@ -179,6 +200,13 @@ class Logger {
     if (this.level <= LogLevel.INFO) {
       const ts = new Date().toISOString().slice(11, 19);
       console.log(`\x1b[32m[${ts}] [OK] ${msg}\x1b[0m`);
+      const entry = { timestamp: new Date().toISOString(), level: "ok", message: msg };
+      this.buffer.push(entry);
+      if (this.buffer.length > this.bufferSize) this.buffer.shift();
+      const line = `data: ${JSON.stringify(entry)}\n\n`;
+      for (const res of this.subscribers) {
+        try { res.write(line); } catch { this.subscribers.delete(res); }
+      }
     }
   }
 }
@@ -579,7 +607,7 @@ export class ClaudeCodeProxy {
 
       const content = Array.isArray(raw.content)
         ? raw.content
-          .map((block: any) => {
+          .map((block: Record<string, unknown>) => {
             if (block?.type === "text") {
               return { type: "text", text: String(block.text || "") };
             }
@@ -1601,7 +1629,10 @@ export class ClaudeCodeProxy {
           config: "/config",
           providers: "/providers",
           usage: "/usage",
-          proxy: "/v1/messages"
+          proxy: "/v1/messages",
+          logs: "/logs",
+          logsStream: "/logs/stream",
+          logsUi: "/logs/ui"
         },
         config: {
           primary: "Anthropic API",
@@ -1748,6 +1779,13 @@ export class ClaudeCodeProxy {
       return;
     }
 
+    // Logs endpoints
+    const reqPathname = (() => { try { return new URL(reqPath, "http://localhost").pathname; } catch { return reqPath.split("?")[0]; } })();
+    if (reqPathname.startsWith("/logs") && reqMethod === "GET") {
+      await this.handleLogsRequest(reqPath, reqPathname, clientRes);
+      return;
+    }
+
     let isStreaming = false;
     try {
       isStreaming = JSON.parse(reqBody).stream === true;
@@ -1763,6 +1801,148 @@ export class ClaudeCodeProxy {
     }
 
     await this.handleStreamingRequest(reqBody, reqHeaders, reqPath, reqMethod, clientRes);
+  }
+
+  /**
+   * Handle log streaming and history requests
+   */
+  private async handleLogsRequest(reqPath: string, pathname: string, clientRes: ServerResponse): Promise<void> {
+    if (pathname === "/logs/stream") {
+      clientRes.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+      });
+
+      // Replay last 100 entries so the client has immediate context
+      for (const entry of this.logger.getRecentLogs(100)) {
+        clientRes.write(`data: ${JSON.stringify(entry)}\n\n`);
+      }
+
+      const ping = setInterval(() => {
+        try { clientRes.write(":ping\n\n"); } catch { clearInterval(ping); }
+      }, 25000);
+
+      const unsubscribe = this.logger.subscribe(clientRes);
+      clientRes.on("close", () => { clearInterval(ping); unsubscribe(); });
+      return;
+    }
+
+    if (pathname === "/logs/ui") {
+      clientRes.writeHead(200, { "Content-Type": "text/html" });
+      clientRes.end(this.renderLogsUI());
+      return;
+    }
+
+    // GET /logs[?limit=N] — JSON snapshot
+    const url = new URL(reqPath, `http://localhost`);
+    const limit = Math.min(parseInt(url.searchParams.get("limit") || "200", 10), 500);
+    const logs = this.logger.getRecentLogs(limit);
+    clientRes.writeHead(200, { "Content-Type": "application/json" });
+    clientRes.end(JSON.stringify({ logs, count: logs.length, generated_at: new Date().toISOString() }));
+  }
+
+  private renderLogsUI(): string {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Claude Proxy — Logs</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d1117;color:#e6edf3;font-family:'Cascadia Code','Fira Mono',monospace;font-size:13px;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+header{padding:10px 16px;border-bottom:1px solid #21262d;display:flex;align-items:center;gap:12px;flex-shrink:0}
+h1{font-size:14px;color:#58a6ff;font-weight:600}
+#status{font-size:11px;padding:2px 8px;border-radius:10px;background:#161b22;border:1px solid #30363d}
+#status.live{border-color:#3fb950;color:#3fb950}
+#status.err{border-color:#f85149;color:#f85149}
+#controls{margin-left:auto;display:flex;gap:8px;align-items:center}
+#search{background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:4px 8px;border-radius:4px;font-size:12px;font-family:inherit;width:200px}
+#clear-btn{background:transparent;border:1px solid #30363d;color:#8b949e;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:12px}
+#clear-btn:hover{border-color:#58a6ff;color:#58a6ff}
+#log-wrap{flex:1;overflow-y:auto;padding:8px 0}
+.entry{padding:2px 16px;line-height:1.5;white-space:pre-wrap;word-break:break-all;display:flex;gap:10px}
+.entry:hover{background:#161b22}
+.ts{color:#484f58;flex-shrink:0;user-select:none}
+.lvl{flex-shrink:0;width:36px;text-align:right;font-weight:600}
+.msg{}
+.info .lvl{color:#58a6ff}
+.ok   .lvl{color:#3fb950}
+.warn .lvl{color:#d29922}
+.error .lvl{color:#f85149}
+.debug .lvl{color:#484f58}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>Claude Code Proxy — Live Logs</h1>
+  <span id="status">Connecting...</span>
+  <div id="controls">
+    <input id="search" type="text" placeholder="Filter logs..." />
+    <button id="clear-btn">Clear</button>
+  </div>
+</header>
+<div id="log-wrap"><div id="log"></div></div>
+<script>
+const log = document.getElementById('log');
+const wrap = document.getElementById('log-wrap');
+const statusEl = document.getElementById('status');
+const searchEl = document.getElementById('search');
+const clearBtn = document.getElementById('clear-btn');
+const MAX = 1000;
+let filter = '';
+let autoScroll = true;
+
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function addEntry(e, prepend=false) {
+  const div = document.createElement('div');
+  div.className = 'entry ' + e.level;
+  div.dataset.msg = e.message.toLowerCase();
+  if (filter && !div.dataset.msg.includes(filter)) div.classList.add('hidden');
+  div.innerHTML =
+    '<span class="ts">' + esc(e.timestamp.slice(11,23)) + '</span>' +
+    '<span class="lvl">' + esc(e.level) + '</span>' +
+    '<span class="msg">' + esc(e.message) + '</span>';
+  if (prepend) {
+    log.insertBefore(div, log.firstChild);
+  } else {
+    log.appendChild(div);
+    while (log.children.length > MAX) log.removeChild(log.firstChild);
+    if (autoScroll) wrap.scrollTop = wrap.scrollHeight;
+  }
+}
+
+wrap.addEventListener('scroll', () => {
+  autoScroll = wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 20;
+});
+
+searchEl.addEventListener('input', () => {
+  filter = searchEl.value.toLowerCase();
+  for (const el of log.children) {
+    el.classList.toggle('hidden', filter && !el.dataset.msg.includes(filter));
+  }
+});
+
+clearBtn.addEventListener('click', () => { log.innerHTML = ''; });
+
+const es = new EventSource('/logs/stream');
+es.onopen = () => {
+  statusEl.textContent = 'Live';
+  statusEl.className = 'live';
+};
+es.onmessage = e => {
+  try { addEntry(JSON.parse(e.data)); } catch {}
+};
+es.onerror = () => {
+  statusEl.textContent = 'Disconnected';
+  statusEl.className = 'err';
+};
+</script>
+</body>
+</html>`;
   }
 
   /**
@@ -1951,6 +2131,9 @@ export class ClaudeCodeProxy {
     console.log(`  ├─ Providers:  \x1b[36mGET  http://127.0.0.1:${port}/providers\x1b[0m`);
     console.log(`  ├─ Reset:      \x1b[36mPOST http://127.0.0.1:${port}/providers/reset\x1b[0m`);
     console.log(`  ├─ Usage:      \x1b[36mGET  http://127.0.0.1:${port}/usage\x1b[0m`);
+    console.log(`  ├─ Logs UI:    \x1b[36mGET  http://127.0.0.1:${port}/logs/ui\x1b[0m`);
+    console.log(`  ├─ Logs JSON:  \x1b[36mGET  http://127.0.0.1:${port}/logs\x1b[0m`);
+    console.log(`  ├─ Logs SSE:   \x1b[36mGET  http://127.0.0.1:${port}/logs/stream\x1b[0m`);
     console.log(`  └─ Proxy:      \x1b[36mPOST http://127.0.0.1:${port}/v1/messages\x1b[0m`);
     console.log('');
 
