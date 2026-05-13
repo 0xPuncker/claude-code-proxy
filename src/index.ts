@@ -1027,6 +1027,23 @@ export class ClaudeCodeProxy {
       selectedProvider = 'anthropic';
     }
 
+    // Check if we should prefer Claude subscription over Z.AI
+    // (when Anthropic has no API key but subscription is available)
+    if (selectedProvider === 'zai' && this.config.claudeSubscription.enabled) {
+      const oauthToken = await this.readClaudeOAuthToken();
+      if (oauthToken && !this.config.anthropic.apiKey) {
+        this.logger.info(`Claude subscription available - preferring subscription over Z.AI`);
+        // Skip provider selection and use subscription directly
+        const subResult = await this.trySubscriptionRequest(reqBody, reqHeaders, reqPath, reqMethod);
+        if (subResult) {
+          this.logger.ok(`[${requestId}] ✓ SUBSCRIPTION ${subResult.status}`);
+          await this.trackRequestMetrics(reqMethod, reqPath, startTime, subResult.status, true, 'anthropic', model, false, subResult.body);
+          return subResult;
+        }
+        // If subscription fails, continue with Z.AI as planned
+      }
+    }
+
     // Apply model conversion if provider selected a different model
     let effectiveReqBody = reqBody;
     const effectiveModel = providerAndModel?.model ?? model;
@@ -1289,6 +1306,7 @@ export class ClaudeCodeProxy {
     const model = this.extractModel(reqBody);
     const requestId = this.generateRequestId();
     const cbEnabled = this.config.circuitBreaker?.enabled !== false;
+    let headersSent = false;
 
     // Determine best provider based on model
     let selectedProvider = cbEnabled ? this.providerHealth.getBestProviderForModel(model) : 'anthropic';
@@ -1297,9 +1315,108 @@ export class ClaudeCodeProxy {
       selectedProvider = 'anthropic';
     }
 
+    // Check if we should prefer Claude subscription over Z.AI
+    // (when Anthropic has no API key but subscription is available)
+    if (selectedProvider === 'zai' && this.config.claudeSubscription.enabled) {
+      const oauthToken = await this.readClaudeOAuthToken();
+      if (oauthToken && !this.config.anthropic.apiKey) {
+        this.logger.info(`[${requestId}] → Claude subscription preferred over Z.AI`);
+        // Try subscription first
+        const cleanedPath = this.cleanPath(reqPath);
+        const cleanedBody = this.cleanBody(reqBody, "subscription");
+
+        const trySubscriptionStream = (token: string) =>
+          new Promise<IncomingMessage>((resolve, reject) => {
+            const subHeaders = this.buildSubscriptionHeaders(reqHeaders, token);
+            subHeaders["content-length"] = Buffer.byteLength(cleanedBody).toString();
+            const url = new URL(`${this.config.claudeSubscription.baseUrl}${cleanedPath}`);
+            const mod = url.protocol === "https:" ? https : http;
+            const req = mod.request(url, { method: reqMethod, headers: subHeaders }, resolve);
+            req.on("error", reject);
+            if (cleanedBody) req.write(cleanedBody);
+            req.end();
+          });
+
+        try {
+          let subRes = await trySubscriptionStream(oauthToken);
+
+          if (subRes.statusCode === 401) {
+            this.logger.warn("← Claude subscription 401 — re-reading credentials and retrying");
+            await this.readIncomingBody(subRes);
+            const freshToken = await this.readClaudeOAuthToken();
+            if (freshToken && freshToken !== oauthToken) {
+              subRes = await trySubscriptionStream(freshToken);
+            } else {
+              this.logger.warn("← Claude subscription 401 — falling back to Z.AI");
+              // Continue with Z.AI
+            }
+          }
+
+          if (subRes.statusCode && subRes.statusCode > 0 && subRes.statusCode < 400) {
+            this.logger.ok(`[${requestId}] ← ✅ Claude subscription (stream) ${subRes.statusCode}`);
+            if (!clientRes.headersSent) {
+              clientRes.writeHead(subRes.statusCode, subRes.headers);
+              headersSent = true;
+            }
+
+            const streamingChunks: string[] = [];
+            const idleTimeoutMs = this.config.timeout?.idleMs || 30000;
+            let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+            const resetIdleTimer = (onIdle: () => void) => {
+              if (idleTimer) clearTimeout(idleTimer);
+              idleTimer = setTimeout(onIdle, idleTimeoutMs);
+            };
+
+            await new Promise<void>((resolveStream, rejectStream) => {
+              resetIdleTimer(() => {
+                this.logger.warn(`[${requestId}] ← ⏱️  Stream idle for ${idleTimeoutMs}ms — destroying upstream connection`);
+                subRes.destroy(new Error(`Stream idle timeout after ${idleTimeoutMs}ms`));
+              });
+
+              subRes.on('data', (chunk) => {
+                resetIdleTimer(() => {
+                  this.logger.warn(`[${requestId}] ← ⏱️  Stream idle for ${idleTimeoutMs}ms — destroying upstream connection`);
+                  subRes.destroy(new Error(`Stream idle timeout after ${idleTimeoutMs}ms`));
+                });
+                try {
+                  streamingChunks.push(chunk.toString());
+                  clientRes.write(chunk);
+                } catch (writeErr) {
+                  this.logger.debug(`Error writing to client: ${writeErr instanceof Error ? writeErr.message : 'Unknown'}`);
+                }
+              });
+
+              subRes.on('end', async () => {
+                if (idleTimer) clearTimeout(idleTimer);
+                try {
+                  clientRes.end();
+                  await this.trackStreamingRequestMetrics(reqMethod, reqPath, startTime, subRes.statusCode || 200, true, 'anthropic', model, streamingChunks);
+                  resolveStream();
+                } catch (endErr) {
+                  this.logger.debug(`Error in subscription end handler: ${endErr instanceof Error ? endErr.message : 'Unknown'}`);
+                  resolveStream();
+                }
+              });
+
+              subRes.on('error', (err) => {
+                if (idleTimer) clearTimeout(idleTimer);
+                rejectStream(err);
+              });
+            });
+
+            this.logger.ok(`[${requestId}] ← ✅ Stream completed via subscription`);
+            return; // Successfully used subscription, exit
+          }
+        } catch (err) {
+          this.logger.warn(`← Claude subscription stream failed: ${err instanceof Error ? err.message : 'Unknown'} — falling back to Z.AI`);
+          // Continue with Z.AI
+        }
+      }
+    }
+
     const primaryProvider = selectedProvider;
     const streamingChunks: string[] = [];
-    let headersSent = false;
 
     // Helper to execute streaming request
     const executeStream = async (provider: 'anthropic' | 'zai' | 'openrouter'): Promise<{ success: boolean; statusCode: number; errorType?: string }> => {

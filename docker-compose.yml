@@ -18,7 +18,7 @@ services:
       - NODE_ENV=${NODE_ENV:-production}
       - CLAUDE_CREDENTIALS_PATH=/app/credentials.json
     volumes:
-      - ${USERPROFILE}/.claude/.credentials.json:/app/credentials.json:rw
+      - C:/Users/User/.claude/.credentials.json:/app/credentials.json:rw
     healthcheck:
       test:
         [
