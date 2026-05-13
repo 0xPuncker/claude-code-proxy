@@ -106,6 +106,7 @@ const DEFAULT_CONFIG: ProxyConfig = {
   timeout: {
     requestMs: parseInt(process.env.API_TIMEOUT_MS || "300000", 10),      // 5 minutes default
     streamingMs: parseInt(process.env.API_STREAMING_TIMEOUT_MS || "600000", 10), // 10 minutes default
+    idleMs: parseInt(process.env.API_STREAM_IDLE_TIMEOUT_MS || "30000", 10),     // 30s per-chunk idle default
     maxRetries: parseInt(process.env.API_MAX_RETRIES || "3", 10),
     retryDelayMs: parseInt(process.env.API_RETRY_DELAY_MS || "1000", 10),
   },
@@ -1357,48 +1358,66 @@ export class ClaudeCodeProxy {
         }
 
         // Success - pipe response to client
-        this.logger.ok(`[${requestId}] ← ✅ ${statusCode} | completed`);
+        this.logger.ok(`[${requestId}] ← ✅ ${statusCode} | streaming`);
         if (!clientRes.headersSent) {
           clientRes.writeHead(statusCode, res.headers);
           headersSent = true;
         }
 
-        res.on('data', (chunk) => {
-          try {
-            streamingChunks.push(chunk.toString());
-            if (!clientRes.headersSent) {
-              headersSent = true;
-            }
-            clientRes.write(chunk);
-          } catch (writeErr) {
-            // Can't write to client - connection might be closed
-            // Log but don't throw to avoid crashing the stream
-            this.logger.debug(`Error writing to client: ${writeErr instanceof Error ? writeErr.message : 'Unknown'}`);
-          }
-        });
+        const idleTimeoutMs = this.config.timeout?.idleMs || 30000; // 30s per-chunk idle default
+        let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
-        res.on('end', async () => {
-          try {
-            if (!clientRes.headersSent) {
-              headersSent = true;
+        const resetIdleTimer = (onIdle: () => void) => {
+          if (idleTimer) clearTimeout(idleTimer);
+          idleTimer = setTimeout(onIdle, idleTimeoutMs);
+        };
+
+        await new Promise<void>((resolveStream, rejectStream) => {
+          resetIdleTimer(() => {
+            this.logger.warn(`[${requestId}] ← ⏱️  Stream idle for ${idleTimeoutMs}ms — destroying upstream connection`);
+            res.destroy(new Error(`Stream idle timeout after ${idleTimeoutMs}ms`));
+          });
+
+          res.on('data', (chunk) => {
+            resetIdleTimer(() => {
+              this.logger.warn(`[${requestId}] ← ⏱️  Stream idle for ${idleTimeoutMs}ms — destroying upstream connection`);
+              res.destroy(new Error(`Stream idle timeout after ${idleTimeoutMs}ms`));
+            });
+            try {
+              streamingChunks.push(chunk.toString());
+              clientRes.write(chunk);
+            } catch (writeErr) {
+              this.logger.debug(`Error writing to client: ${writeErr instanceof Error ? writeErr.message : 'Unknown'}`);
             }
-            clientRes.end();
-            const latency = Date.now() - startTime;
-            if (cbEnabled) {
-              this.providerHealth.recordSuccess(provider, latency);
-              // Record token usage for quota tracking
-              const tokenUsage = UsageTracker.extractStreamingTokenUsage(streamingChunks);
-              if (tokenUsage) {
-                this.providerHealth.recordTokenUsage(provider, tokenUsage.input_tokens, tokenUsage.output_tokens);
+          });
+
+          res.on('end', async () => {
+            if (idleTimer) clearTimeout(idleTimer);
+            try {
+              clientRes.end();
+              const latency = Date.now() - startTime;
+              if (cbEnabled) {
+                this.providerHealth.recordSuccess(provider, latency);
+                const tokenUsage = UsageTracker.extractStreamingTokenUsage(streamingChunks);
+                if (tokenUsage) {
+                  this.providerHealth.recordTokenUsage(provider, tokenUsage.input_tokens, tokenUsage.output_tokens);
+                }
               }
+              await this.trackStreamingRequestMetrics(reqMethod, reqPath, startTime, statusCode, false, provider, model, streamingChunks);
+              resolveStream();
+            } catch (endErr) {
+              this.logger.debug(`Error in stream end handler: ${endErr instanceof Error ? endErr.message : 'Unknown'}`);
+              resolveStream();
             }
-            await this.trackStreamingRequestMetrics(reqMethod, reqPath, startTime, statusCode, false, provider, model, streamingChunks);
-          } catch (endErr) {
-            // Error during end processing - log but don't throw
-            this.logger.debug(`Error in stream end handler: ${endErr instanceof Error ? endErr.message : 'Unknown'}`);
-          }
+          });
+
+          res.on('error', (err) => {
+            if (idleTimer) clearTimeout(idleTimer);
+            rejectStream(err);
+          });
         });
 
+        this.logger.ok(`[${requestId}] ← ✅ Stream completed`);
         return { success: true, statusCode };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : "Unknown";
@@ -1763,6 +1782,7 @@ export class ClaudeCodeProxy {
         timeout: {
           requestMs: this.config.timeout?.requestMs,
           streamingMs: this.config.timeout?.streamingMs,
+          idleMs: this.config.timeout?.idleMs,
           maxRetries: this.config.timeout?.maxRetries,
           retryDelayMs: this.config.timeout?.retryDelayMs
         },
