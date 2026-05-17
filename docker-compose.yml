@@ -17,8 +17,9 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - NODE_ENV=${NODE_ENV:-production}
       - CLAUDE_CREDENTIALS_PATH=/app/credentials.json
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@${DB_HOST:-cc-db}:5432/${POSTGRES_DB:-claude_proxy}
     volumes:
-      - C:/Users/User/.claude/.credentials.json:/app/credentials.json:rw
+      - ~/.claude/.credentials.json:/app/credentials.json:rw
     healthcheck:
       test:
         [
