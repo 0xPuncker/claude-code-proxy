@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { ClaudeCodeProxy } from "../dist/index.js";
+import { ProviderState } from "../dist/provider-health.js";
 
 function createProxy(overrides = {}) {
   return new ClaudeCodeProxy({
@@ -103,6 +104,45 @@ describe("Claude Code Proxy fallback chain", () => {
 
     assert.equal(response.status, 200);
     assert.deepEqual(providersCalled, ["anthropic"]);
+    assert.equal(proxy.providerHealth.getState("anthropic"), ProviderState.COOLING_DOWN);
+    proxy.providerHealth.destroy();
+  });
+
+  it("records primary provider quota failures before falling back", async () => {
+    const proxy = createProxy();
+
+    proxy.trySubscriptionRequest = async () => undefined;
+    proxy.requestProvider = async (provider) => {
+      if (provider === "anthropic") {
+        return {
+          response: jsonResponse(403, {
+            error: { message: "quota exceeded for this account" },
+          }),
+          errorType: "rate_limit",
+        };
+      }
+
+      return { response: jsonResponse(200, { id: "fallback-ok" }) };
+    };
+
+    try {
+      const response = await proxy.proxyRequest(
+        JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 16,
+          messages: [{ role: "user", content: "hello" }],
+        }),
+        { "content-type": "application/json" },
+        "/v1/messages",
+        "POST",
+      );
+
+      assert.equal(response.status, 200);
+      assert.equal(proxy.providerHealth.getState("anthropic"), ProviderState.COOLING_DOWN);
+      assert.equal(proxy.providerHealth.isAvailable("anthropic"), false);
+    } finally {
+      proxy.providerHealth.destroy();
+    }
   });
 
   it("falls through anthropic and zai before using openrouter", async () => {
@@ -192,6 +232,47 @@ describe("Claude Code Proxy fallback chain", () => {
     );
 
     assert.equal(response, undefined);
+  });
+
+  it("opens a cooldown circuit after Claude subscription limit responses", async () => {
+    const proxy = createProxy({
+      circuitBreaker: {
+        cooldownMs: 1000,
+      },
+    });
+    let upstreamCalls = 0;
+
+    proxy.readClaudeOAuthToken = async () => "oauth-token";
+    proxy.httpRequest = async () => {
+      upstreamCalls++;
+      return jsonResponse(429, { error: { message: "usage limit reached" } });
+    };
+
+    const requestBody = JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hello" }],
+    });
+
+    const first = await proxy.trySubscriptionRequest(
+      requestBody,
+      { "content-type": "application/json" },
+      "/v1/messages",
+      "POST",
+    );
+    const second = await proxy.trySubscriptionRequest(
+      requestBody,
+      { "content-type": "application/json" },
+      "/v1/messages",
+      "POST",
+    );
+
+    assert.equal(first, undefined);
+    assert.equal(second, undefined);
+    assert.equal(upstreamCalls, 1);
+    assert.equal(proxy.getClaudeSubscriptionState().state, "cooling_down");
+
+    proxy.providerHealth.destroy();
   });
 
   it("routes Claude subscription OAuth requests to the Anthropic API host", async () => {
@@ -353,6 +434,39 @@ describe("Claude Code Proxy provider request normalization", () => {
     );
 
     assert.equal(capturedUrl, "https://api.z.ai/api/anthropic/v1/messages");
+  });
+
+  it("classifies quota-style provider responses as rate limits", async () => {
+    const upstream = await startUpstream((_req, res) => {
+      res.writeHead(403, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "quota exceeded for this account" } }));
+    });
+    const proxy = createProxy({
+      anthropic: {
+        baseUrl: upstream.baseUrl,
+        apiKey: "anthropic-test-key",
+      },
+    });
+
+    try {
+      const result = await proxy.requestProvider(
+        "anthropic",
+        JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 16,
+          messages: [{ role: "user", content: "hello" }],
+        }),
+        { "content-type": "application/json" },
+        "/v1/messages",
+        "POST",
+      );
+
+      assert.equal(result.response.status, 403);
+      assert.equal(result.errorType, "rate_limit");
+    } finally {
+      proxy.providerHealth.destroy();
+      await closeServer(upstream.server);
+    }
   });
 
   it("rewrites openrouter requests to the messages endpoint and remaps models", async () => {

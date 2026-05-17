@@ -712,6 +712,7 @@ export class ProviderHealth {
         }
       }
     }, delay);
+    timer.unref?.();
 
     this.healthCheckTimers.set(provider, timer);
   }

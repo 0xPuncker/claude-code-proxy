@@ -226,6 +226,7 @@ export class ClaudeCodeProxy {
   private usageTracker: UsageTracker;
   private providerHealth: ProviderHealth;
   private requestCounter = 0;
+  private subscriptionCooldownUntil = 0;
 
   constructor(config: Partial<ProxyConfig> = {}) {
     this.config = this.mergeConfig(config);
@@ -348,7 +349,7 @@ export class ClaudeCodeProxy {
     reqPath: string,
     reqMethod: string
   ): Promise<HttpResponse | undefined> {
-    if (!this.config.claudeSubscription.enabled) return undefined;
+    if (!this.canTryClaudeSubscription()) return undefined;
 
     const oauthToken = await this.readClaudeOAuthToken();
     if (!oauthToken) {
@@ -379,10 +380,12 @@ export class ClaudeCodeProxy {
       }
 
       if (subRes.status < 400) {
+        this.resetClaudeSubscriptionCircuit();
         this.logger.ok(`← Claude subscription ${subRes.status}`);
         return subRes;
       }
 
+      this.recordClaudeSubscriptionFailure(subRes.status, subRes.body);
       const details = subRes.body.toString().slice(0, 300);
       const message = `← Claude subscription ❌ ${subRes.status}: ${details} — trying next provider`;
       if (this.config.fallbackOnCodes.includes(subRes.status)) {
@@ -392,6 +395,7 @@ export class ClaudeCodeProxy {
       }
       return undefined;
     } catch (err) {
+      this.enterClaudeSubscriptionCooldown("network error");
       this.logger.error(`← Claude subscription ❌ ${err instanceof Error ? err.message : "Unknown"} — fallback`);
       return undefined;
     }
@@ -619,6 +623,99 @@ export class ClaudeCodeProxy {
       return contextWindowPatterns.some(pattern => lower.includes(pattern));
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Check if a response body/status represents provider quota or rate limiting.
+   * Some providers return quota exhaustion as 403/400 with a textual error rather
+   * than a plain HTTP 429.
+   */
+  private isRateLimitError(status: number, body: Buffer): boolean {
+    if (status === 429) return true;
+
+    const lower = body.toString().toLowerCase();
+    const rateLimitPatterns = [
+      "rate limit",
+      "rate_limit",
+      "rate-limit",
+      "too many requests",
+      "quota exceeded",
+      "quota_exceeded",
+      "usage limit",
+      "credit balance",
+      "insufficient credits",
+      "billing",
+      "overloaded",
+      "capacity",
+    ];
+
+    return rateLimitPatterns.some((pattern) => lower.includes(pattern));
+  }
+
+  private classifyProviderError(
+    status: number,
+    body: Buffer
+  ): "rate_limit" | "context_window" | "other" {
+    if (this.isRateLimitError(status, body)) {
+      return "rate_limit";
+    }
+    if (this.isContextWindowError(body)) {
+      return "context_window";
+    }
+    return "other";
+  }
+
+  private getClaudeSubscriptionState(): {
+    state: "healthy" | "cooling_down";
+    available: boolean;
+    readyAt?: string;
+  } {
+    const cooldownEnd = this.subscriptionCooldownUntil;
+    if (cooldownEnd > Date.now()) {
+      return {
+        state: "cooling_down",
+        available: false,
+        readyAt: new Date(cooldownEnd).toISOString(),
+      };
+    }
+
+    return {
+      state: "healthy",
+      available: this.config.claudeSubscription.enabled,
+    };
+  }
+
+  private canTryClaudeSubscription(): boolean {
+    return (
+      this.config.claudeSubscription.enabled &&
+      this.subscriptionCooldownUntil <= Date.now()
+    );
+  }
+
+  private resetClaudeSubscriptionCircuit(): void {
+    this.subscriptionCooldownUntil = 0;
+  }
+
+  private enterClaudeSubscriptionCooldown(reason: string): void {
+    const cooldownMs = this.config.circuitBreaker?.cooldownMs || 60000;
+    this.subscriptionCooldownUntil = Date.now() + cooldownMs;
+    this.logger.warn(
+      `Claude subscription circuit open (${reason}); cooling down until ${new Date(
+        this.subscriptionCooldownUntil
+      ).toISOString()}`
+    );
+  }
+
+  private recordClaudeSubscriptionFailure(status: number, body: Buffer): void {
+    const errorType = this.classifyProviderError(status, body);
+    if (errorType === "rate_limit" || errorType === "context_window") {
+      this.enterClaudeSubscriptionCooldown(errorType);
+      return;
+    }
+
+    if (this.config.fallbackOnCodes.includes(status)) {
+      this.enterClaudeSubscriptionCooldown(`HTTP ${status}`);
     }
   }
 
@@ -990,13 +1087,9 @@ export class ClaudeCodeProxy {
     // Detect error types
     let errorType: 'rate_limit' | 'context_window' | 'other' | undefined;
     if (response.status >= 400) {
-      if (response.status === 429) {
-        errorType = 'rate_limit';
-      } else if (this.isContextWindowError(response.body)) {
-        errorType = 'context_window';
+      errorType = this.classifyProviderError(response.status, response.body);
+      if (errorType === "context_window") {
         this.logger.debug(`  Context window error detected for ${provider}`);
-      } else {
-        errorType = 'other';
       }
     }
 
@@ -1029,7 +1122,7 @@ export class ClaudeCodeProxy {
 
     // Check if we should prefer Claude subscription over Z.AI
     // (when Anthropic has no API key but subscription is available)
-    if (selectedProvider === 'zai' && this.config.claudeSubscription.enabled) {
+    if (selectedProvider === 'zai' && this.canTryClaudeSubscription()) {
       const oauthToken = await this.readClaudeOAuthToken();
       if (oauthToken && !this.config.anthropic.apiKey) {
         this.logger.info(`Claude subscription available - preferring subscription over Z.AI`);
@@ -1098,6 +1191,9 @@ export class ClaudeCodeProxy {
       const reason = errorType === 'context_window' ? "context window" :
                      errorType === 'rate_limit' ? "rate limit" :
                      `HTTP ${response.status}`;
+      if (cbEnabled && errorType) {
+        this.providerHealth.recordFailure(primaryProvider, errorType);
+      }
       this.logger.warn(`[${requestId}] ← ⚠️  ${primaryProvider.toUpperCase()} ${reason} — trying subscription`);
 
       // Try Claude subscription before the other API provider
@@ -1153,16 +1249,8 @@ export class ClaudeCodeProxy {
 
         lastFallbackResponse = fallbackRes;
         if (cbEnabled) {
-          const fbErrorType =
-            fallbackRes.status === 429
-              ? "rate_limit"
-              : this.isContextWindowError(fallbackRes.body)
-                ? "context_window"
-                : "other";
-          this.providerHealth.recordFailure(
-            fallbackProvider,
-            fbErrorType
-          );
+          const fbErrorType = this.classifyProviderError(fallbackRes.status, fallbackRes.body);
+          this.providerHealth.recordFailure(fallbackProvider, fbErrorType);
         }
 
         this.logger.error(
@@ -1248,16 +1336,8 @@ export class ClaudeCodeProxy {
 
           lastFallbackResponse = fallbackRes;
           if (cbEnabled) {
-            const fbErrorType =
-              fallbackRes.status === 429
-                ? "rate_limit"
-                : this.isContextWindowError(fallbackRes.body)
-                  ? "context_window"
-                  : "other";
-            this.providerHealth.recordFailure(
-              fallbackProvider,
-              fbErrorType
-            );
+            const fbErrorType = this.classifyProviderError(fallbackRes.status, fallbackRes.body);
+            this.providerHealth.recordFailure(fallbackProvider, fbErrorType);
           }
 
           this.logger.error(`← ${fallbackProvider.toUpperCase()} ${fallbackRes.status}`);
@@ -1317,7 +1397,7 @@ export class ClaudeCodeProxy {
 
     // Check if we should prefer Claude subscription over Z.AI
     // (when Anthropic has no API key but subscription is available)
-    if (selectedProvider === 'zai' && this.config.claudeSubscription.enabled) {
+    if (selectedProvider === 'zai' && this.canTryClaudeSubscription()) {
       const oauthToken = await this.readClaudeOAuthToken();
       if (oauthToken && !this.config.anthropic.apiKey) {
         this.logger.info(`[${requestId}] → Claude subscription preferred over Z.AI`);
@@ -1353,6 +1433,7 @@ export class ClaudeCodeProxy {
           }
 
           if (subRes.statusCode && subRes.statusCode > 0 && subRes.statusCode < 400) {
+            this.resetClaudeSubscriptionCircuit();
             this.logger.ok(`[${requestId}] ← ✅ Claude subscription (stream) ${subRes.statusCode}`);
             if (!clientRes.headersSent) {
               clientRes.writeHead(subRes.statusCode, subRes.headers);
@@ -1408,7 +1489,19 @@ export class ClaudeCodeProxy {
             this.logger.ok(`[${requestId}] ← ✅ Stream completed via subscription`);
             return; // Successfully used subscription, exit
           }
+
+          const subStatus = subRes.statusCode || 0;
+          if (subStatus >= 400) {
+            const subErrorBody = await this.readIncomingBody(subRes);
+            this.recordClaudeSubscriptionFailure(subStatus, subErrorBody);
+            this.logger.warn(
+              `← Claude subscription ❌ ${subStatus}: ${subErrorBody
+                .toString()
+                .slice(0, 300)} — falling back to Z.AI`
+            );
+          }
         } catch (err) {
+          this.enterClaudeSubscriptionCooldown("stream error");
           this.logger.warn(`← Claude subscription stream failed: ${err instanceof Error ? err.message : 'Unknown'} — falling back to Z.AI`);
           // Continue with Z.AI
         }
@@ -1475,14 +1568,7 @@ export class ClaudeCodeProxy {
           }
           const errorBody = Buffer.concat(chunks);
 
-          let errorType: "rate_limit" | "context_window" | "other" | undefined;
-          if (statusCode === 429) {
-            errorType = 'rate_limit';
-          } else if (this.isContextWindowError(errorBody)) {
-            errorType = 'context_window';
-          } else {
-            errorType = 'other';
-          }
+          const errorType = this.classifyProviderError(statusCode, errorBody);
 
           if (cbEnabled && errorType) {
             this.providerHealth.recordFailure(provider, errorType);
@@ -1592,7 +1678,7 @@ export class ClaudeCodeProxy {
     const cleanedPath = this.cleanPath(reqPath);
     const cleanedBody = this.cleanBody(reqBody, "subscription");
 
-    if (this.config.claudeSubscription.enabled) {
+    if (this.canTryClaudeSubscription()) {
       const oauthToken = await this.readClaudeOAuthToken();
       if (oauthToken) {
         const trySubscriptionStream = (token: string) =>
@@ -1625,6 +1711,7 @@ export class ClaudeCodeProxy {
           if (subRes) {
             const subStatus = subRes.statusCode || 0;
             if (subStatus > 0 && subStatus < 400) {
+              this.resetClaudeSubscriptionCircuit();
               this.logger.ok(`← Claude subscription (stream) ${subRes.statusCode}`);
               if (!clientRes.headersSent) {
                 clientRes.writeHead(subRes.statusCode!, subRes.headers);
@@ -1650,6 +1737,7 @@ export class ClaudeCodeProxy {
             }
 
             const subErrorBody = await this.readIncomingBody(subRes);
+            this.recordClaudeSubscriptionFailure(subStatus, subErrorBody);
             const subMessage = `← Claude subscription ❌ ${subStatus}: ${subErrorBody
               .toString()
               .slice(0, 300)} — trying other provider`;
@@ -1660,6 +1748,7 @@ export class ClaudeCodeProxy {
             }
           }
         } catch (err) {
+          this.enterClaudeSubscriptionCooldown("stream error");
           this.logger.error(`← Claude subscription ❌ stream error: ${err instanceof Error ? err.message : "Unknown"}`);
         }
       } else {
@@ -1825,7 +1914,8 @@ export class ClaudeCodeProxy {
           openrouter: {
             state: providerStatus.find(p => p.provider === 'openrouter')?.state || 'unknown',
             available: providerStatus.find(p => p.provider === 'openrouter')?.available || false
-          }
+          },
+          subscription: this.getClaudeSubscriptionState()
         } : undefined
       }));
       return;
@@ -1848,6 +1938,7 @@ export class ClaudeCodeProxy {
       clientRes.end(JSON.stringify({
         enabled: true,
         bestProvider: this.providerHealth.getBestProvider(),
+        subscription: this.getClaudeSubscriptionState(),
         providers: status.map(s => ({
           provider: s.provider,
           state: s.state,
@@ -1877,8 +1968,9 @@ export class ClaudeCodeProxy {
       clientRes.end(JSON.stringify({
         status: "ok",
         message: "All providers have been reset to healthy state",
-        providers: ["anthropic", "zai", "openrouter"]
+        providers: ["anthropic", "zai", "openrouter", "subscription"]
       }));
+      this.resetClaudeSubscriptionCircuit();
       return;
     }
 
