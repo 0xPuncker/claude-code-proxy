@@ -2320,6 +2320,8 @@ es.onerror = () => {
   public async start(): Promise<void> {
     const port = this.config.port;
 
+    this.logger.info(`Logger initialized at level=${this.config.logLevel}`);
+
     // Initialize database if tracking is enabled
     if (this.usageTracker.isTrackingEnabled()) {
       try {
@@ -2333,6 +2335,7 @@ es.onerror = () => {
 
     this.server.listen(port, "0.0.0.0", () => {
       this.printStartupBanner(port);
+      this.logger.ok(`Server listening on 0.0.0.0:${port} (level=${this.config.logLevel})`);
     });
   }
 
