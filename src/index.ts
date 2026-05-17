@@ -1946,6 +1946,13 @@ export class ClaudeCodeProxy {
       return;
     }
 
+    // Reject non-API paths (e.g. browser favicon/asset requests) before hitting provider chain
+    if (!reqPathname.startsWith("/v1/") && !reqPathname.startsWith("/api/")) {
+      clientRes.writeHead(404, { "Content-Type": "application/json" });
+      clientRes.end(JSON.stringify({ error: "Not found" }));
+      return;
+    }
+
     let isStreaming = false;
     try {
       isStreaming = JSON.parse(reqBody).stream === true;
