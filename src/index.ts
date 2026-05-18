@@ -1718,7 +1718,12 @@ export class ClaudeCodeProxy {
       tokenUsage: tokenUsage || undefined,
     };
 
-    await this.usageTracker.trackRequest(method, path, metrics);
+    const trackedId = await this.usageTracker.trackRequest(method, path, metrics);
+    if (trackedId !== null) {
+      this.logger.debug(`tracked: id=${trackedId} provider=${provider} status=${statusCode} duration=${duration}ms`);
+    } else {
+      this.logger.warn(`tracking write returned null — DB unreachable or insert failed (provider=${provider} status=${statusCode})`);
+    }
   }
 
   /**
@@ -1757,7 +1762,12 @@ export class ClaudeCodeProxy {
       tokenUsage: tokenUsage || undefined,
     };
 
-    await this.usageTracker.trackRequest(method, path, metrics);
+    const trackedId = await this.usageTracker.trackRequest(method, path, metrics);
+    if (trackedId !== null) {
+      this.logger.debug(`tracked: id=${trackedId} provider=${provider} status=${statusCode} duration=${duration}ms`);
+    } else {
+      this.logger.warn(`tracking write returned null — DB unreachable or insert failed (provider=${provider} status=${statusCode})`);
+    }
   }
 
   /**
@@ -2320,6 +2330,9 @@ es.onerror = () => {
   public async start(): Promise<void> {
     const port = this.config.port;
 
+    this.logger.info(`Logger initialized at level=${this.config.logLevel}`);
+    this.logger.info(`Usage tracking enabled=${this.usageTracker.isTrackingEnabled()}`);
+
     // Initialize database if tracking is enabled
     if (this.usageTracker.isTrackingEnabled()) {
       try {
@@ -2329,10 +2342,13 @@ es.onerror = () => {
         this.logger.error("Failed to initialize database tracking");
         this.logger.error("Continuing without database tracking...");
       }
+    } else {
+      this.logger.warn("Usage tracking disabled — DATABASE_URL not set, /usage will return empty");
     }
 
     this.server.listen(port, "0.0.0.0", () => {
       this.printStartupBanner(port);
+      this.logger.ok(`Server listening on 0.0.0.0:${port} (level=${this.config.logLevel})`);
     });
   }
 
