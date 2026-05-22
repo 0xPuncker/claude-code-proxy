@@ -394,6 +394,72 @@ describe("Claude Code Proxy fallback chain", () => {
     }
   });
 
+  it("falls back to Z.AI when Claude subscription streams an immediate limit error", async () => {
+    const subscriptionUpstream = await startUpstream((_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(
+        'event: error\n' +
+        'data: {"type":"error","error":{"type":"rate_limit_error","message":"usage limit reached"}}\n\n'
+      );
+    });
+    const zaiUpstream = await startUpstream((req, res) => {
+      const chunks = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        const parsed = JSON.parse(Buffer.concat(chunks).toString());
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(`data: {"type":"message_start","message":{"model":"${parsed.model}"}}\n\n`);
+      });
+    });
+    let proxy;
+
+    try {
+      proxy = createProxy({
+        anthropic: {
+          apiKey: "",
+        },
+        zai: {
+          baseUrl: zaiUpstream.baseUrl,
+          apiKey: "zai-test-key",
+        },
+        claudeSubscription: {
+          enabled: true,
+          baseUrl: subscriptionUpstream.baseUrl,
+          credentialsPath: "test-credentials.json",
+        },
+        circuitBreaker: {
+          cooldownMs: 1000,
+        },
+      });
+
+      proxy.providerHealth.getBestProviderForModel = () => "zai";
+      proxy.readClaudeOAuthToken = async () => "oauth-token";
+      const clientRes = createFakeResponse();
+
+      await proxy.handleStreamingRequest(
+        JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 16,
+          stream: true,
+          messages: [{ role: "user", content: "hello" }],
+        }),
+        { "content-type": "application/json" },
+        "/v1/messages",
+        "POST",
+        clientRes,
+      );
+      await clientRes.ended;
+
+      assert.equal(clientRes.statusCode, 200);
+      assert.match(Buffer.concat(clientRes.chunks).toString(), /"model":"glm-4\.7"/);
+      assert.equal(proxy.getClaudeSubscriptionState().state, "cooling_down");
+    } finally {
+      proxy?.providerHealth.destroy();
+      await closeServer(subscriptionUpstream.server);
+      await closeServer(zaiUpstream.server);
+    }
+  });
+
   it("orders fallback providers by priority and skips providers without keys", () => {
     const proxy = createProxy({
       openrouter: {

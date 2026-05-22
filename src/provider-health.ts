@@ -631,7 +631,7 @@ export class ProviderHealth {
    */
   recordFailure(
     provider: "anthropic" | "zai" | "openrouter",
-    errorType: "rate_limit" | "context_window" | "other"
+    errorType: "rate_limit" | "context_window" | "auth_error" | "other"
   ): void {
     const metrics = this.metrics.get(provider)!;
     const config = this.providers.get(provider)!;
@@ -648,9 +648,10 @@ export class ProviderHealth {
       metrics.contextWindowErrors++;
     }
 
-    // IMMEDIATE COOLDOWN for context window or rate limit errors
-    // This prevents cascading failures when many concurrent requests are sent
-    if (errorType === "context_window" || errorType === "rate_limit") {
+    // IMMEDIATE COOLDOWN for context window, rate limit, or auth errors.
+    // Auth errors (401/403) mean the API key is invalid — retrying immediately
+    // is pointless and just produces noise until the key is fixed.
+    if (errorType === "context_window" || errorType === "rate_limit" || errorType === "auth_error") {
       this.enterCooldown(provider);
       return;
     }
