@@ -1,10 +1,10 @@
 services:
   # Claude Code Proxy
   cc-proxy:
+    container_name: cc-proxy
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ${PROXY_CONTAINER_NAME:-cc-proxy}
     ports:
       - "${HOST_PROXY_PORT:-4181}:4181"
     env_file:
@@ -18,7 +18,7 @@ services:
       - CLAUDE_CREDENTIALS_PATH=/app/credentials.json
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@${DB_HOST:-cc-db}:5432/${POSTGRES_DB:-claude_proxy}
     volumes:
-      - ~/.claude/.credentials.json:/app/credentials.json:rw
+      - ~/.claude/claude-credentials.json:/app/credentials.json:rw
     healthcheck:
       test:
         [
@@ -41,8 +41,8 @@ services:
 
   # PostgreSQL Database
   cc-db:
+    container_name: cc-db
     image: postgres:${POSTGRES_VERSION:-15}-alpine
-    container_name: ${DB_CONTAINER_NAME:-cc-db}
     environment:
       - POSTGRES_DB=${POSTGRES_DB:-claude_proxy}
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
@@ -63,8 +63,8 @@ services:
 
   # Adminer (Database Management UI)
   cc-adminer:
+    container_name: cc-adminer
     image: adminer:${ADMINER_VERSION:-latest}
-    container_name: ${ADMINER_CONTAINER_NAME:-cc-adminer}
     ports:
       - "${ADMINER_PORT:-8080}:8080"
     environment:
