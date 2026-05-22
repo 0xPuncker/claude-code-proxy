@@ -23,6 +23,8 @@
     "db:seed": "node dist/database/seed.js",
     "setup:claude": "node scripts/setup-claude-proxy.js",
     "setup:docker": "powershell -ExecutionPolicy Bypass -File scripts/setup-docker.ps1",
+    "settings:update": "node scripts/update-claude-settings.js",
+    "settings:update:bash": "bash scripts/update-claude-settings.sh",
     "settings:restore": "node scripts/restore-claude-settings.js",
     "settings:backup": "node scripts/backup-claude-settings.js",
     "providers:reset": "curl -s -X POST http://127.0.0.1:4181/providers/reset",
@@ -39,16 +41,16 @@
     "usage-tracking",
     "prisma"
   ],
-  "author": "Raul Neiva",
+  "author": "0xPuncker",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/raulneiva/claude-code-proxy.git"
   },
   "bugs": {
-    "url": "https://github.com/raulneiva/claude-code-proxy/issues"
+    "url": "https://github.com/0xPuncker/claude-code-proxy/issues"
   },
-  "homepage": "https://github.com/raulneiva/claude-code-proxy#readme",
+  "homepage": "https://github.com/0xPuncker/claude-code-proxy#readme",
   "engines": {
     "node": ">=18.0.0"
   },

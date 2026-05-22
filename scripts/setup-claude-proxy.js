@@ -13,6 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PROXY_PORT = process.env.HOST_PROXY_PORT || process.env.PROXY_PORT || '4181';
 const PROXY_URL = `http://127.0.0.1:${PROXY_PORT}`;
+const PROXY_API_KEY = process.env.CC_PROXY_API_KEY || 'cc-proxy';
 
 // Paths
 const homeDir = os.homedir();
@@ -66,11 +67,12 @@ function backupSettings() {
 function isProxyConfigured(settings) {
   if (!settings) return false;
 
-  // Check for various ways the proxy might be configured
-  if (settings.env?.ANTHROPIC_API_URL?.includes('127.0.0.1:4181')) return true;
-  if (settings.apiUrl?.includes('127.0.0.1:4181')) return true;
+  if (settings.env?.ANTHROPIC_API_URL !== PROXY_URL) return false;
+  if (settings.env?.ANTHROPIC_BASE_URL !== PROXY_URL) return false;
+  if (!settings.env?.ANTHROPIC_API_KEY) return false;
+  if (settings.env?.ANTHROPIC_AUTH_TOKEN) return false;
 
-  return false;
+  return true;
 }
 
 /**
@@ -87,8 +89,10 @@ function addProxyConfig(settings) {
     settings.env = {};
   }
 
-  // Set the proxy URL — ANTHROPIC_BASE_URL is what the Anthropic SDK reads
+  settings.env.ANTHROPIC_API_URL = PROXY_URL;
   settings.env.ANTHROPIC_BASE_URL = PROXY_URL;
+  settings.env.ANTHROPIC_API_KEY = PROXY_API_KEY;
+  delete settings.env.ANTHROPIC_AUTH_TOKEN;
 
   return settings;
 }

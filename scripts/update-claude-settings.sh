@@ -13,7 +13,9 @@ NC='\033[0m' # No Color
 
 # Configuration
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
-CC_PROXY_URL="http://127.0.0.1:4181"
+CC_PROXY_PORT="${HOST_PROXY_PORT:-${PROXY_PORT:-4181}}"
+CC_PROXY_URL="http://127.0.0.1:$CC_PROXY_PORT"
+CC_PROXY_API_KEY="${CC_PROXY_API_KEY:-cc-proxy}"
 BACKUP_DIR="$HOME/.claude/backups"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="$BACKUP_DIR/settings.json.backup.$TIMESTAMP"
@@ -66,13 +68,12 @@ echo ""
 
 # Update settings
 echo -e "${YELLOW}⚙️  Updating settings for cc-proxy...${NC}"
-jq --arg url "$CC_PROXY_URL" '
-  if .env.ANTHROPIC_AUTH_TOKEN then
-    del(.env.ANTHROPIC_AUTH_TOKEN) |
-    .env.ANTHROPIC_BASE_URL = $url
-  else
-    .env.ANTHROPIC_BASE_URL = $url
-  end
+jq --arg url "$CC_PROXY_URL" --arg key "$CC_PROXY_API_KEY" '
+  .env = (.env // {}) |
+  del(.env.ANTHROPIC_AUTH_TOKEN) |
+  .env.ANTHROPIC_BASE_URL = $url |
+  .env.ANTHROPIC_API_URL = $url |
+  .env.ANTHROPIC_API_KEY = $key
 ' "$CLAUDE_SETTINGS" > "${CLAUDE_SETTINGS}.tmp"
 
 # Validate new settings
@@ -89,11 +90,15 @@ echo ""
 # Display changes
 echo -e "${BLUE}📊 Configuration changes:${NC}"
 echo -e "${GREEN}BEFORE:${NC}"
+jq -r '.env | "  ANTHROPIC_API_URL: \(.ANTHROPIC_API_URL // "not set")"' "$BACKUP_FILE" 2>/dev/null || echo "  ANTHROPIC_API_URL: not set"
 jq -r '.env | "  ANTHROPIC_BASE_URL: \(.ANTHROPIC_BASE_URL // "not set")"' "$BACKUP_FILE" 2>/dev/null || echo "  ANTHROPIC_BASE_URL: not set"
+jq -r '.env | "  ANTHROPIC_API_KEY: \(if .ANTHROPIC_API_KEY then "set" else "not set" end)"' "$BACKUP_FILE" 2>/dev/null || echo "  ANTHROPIC_API_KEY: not set"
 jq -r '.env | "  ANTHROPIC_AUTH_TOKEN: \(.ANTHROPIC_AUTH_TOKEN // "not set")"' "$BACKUP_FILE" 2>/dev/null || echo "  ANTHROPIC_AUTH_TOKEN: not set"
 
 echo -e "${GREEN}AFTER:${NC}"
+jq -r '.env | "  ANTHROPIC_API_URL: \(.ANTHROPIC_API_URL // "not set")"' "$CLAUDE_SETTINGS" 2>/dev/null || echo "  ANTHROPIC_API_URL: not set"
 jq -r '.env | "  ANTHROPIC_BASE_URL: \(.ANTHROPIC_BASE_URL // "not set")"' "$CLAUDE_SETTINGS" 2>/dev/null || echo "  ANTHROPIC_BASE_URL: not set"
+jq -r '.env | "  ANTHROPIC_API_KEY: \(.ANTHROPIC_API_KEY // "not set")"' "$CLAUDE_SETTINGS" 2>/dev/null || echo "  ANTHROPIC_API_KEY: not set"
 jq -r '.env | "  ANTHROPIC_AUTH_TOKEN: removed (handled by proxy)"' "$CLAUDE_SETTINGS" 2>/dev/null
 echo ""
 

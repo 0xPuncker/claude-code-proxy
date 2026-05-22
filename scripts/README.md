@@ -50,6 +50,8 @@ npm run settings:restore
 1. **Backup**: Creates `~/.claude/backups/settings.json.backup.TIMESTAMP`
 2. **Update**: Modifies `~/.claude/settings.json`:
    - Sets `ANTHROPIC_BASE_URL` to `http://127.0.0.1:4181`
+   - Sets `ANTHROPIC_API_URL` to `http://127.0.0.1:4181` for compatibility
+   - Sets `ANTHROPIC_API_KEY` to a local placeholder (`cc-proxy`) so Claude Code uses the API path
    - Removes `ANTHROPIC_AUTH_TOKEN` (handled by cc-proxy)
 3. **Validate**: Ensures JSON syntax is correct
 4. **Report**: Shows exactly what was changed
@@ -62,7 +64,9 @@ If you prefer to configure manually, update `~/.claude/settings.json`:
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:4181"
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:4181",
+    "ANTHROPIC_API_URL": "http://127.0.0.1:4181",
+    "ANTHROPIC_API_KEY": "cc-proxy"
     // Remove ANTHROPIC_AUTH_TOKEN if present
   }
 }
@@ -88,19 +92,19 @@ curl -s http://127.0.0.1:4181/api/logs | jq .
 **Proxy not responding:**
 ```bash
 # Check if proxy is running
-docker ps | grep cc-proxy
+docker compose ps cc-proxy
 
 # Start proxy if needed
-docker-compose up -d
+docker compose up -d
 
 # Check proxy logs
-docker logs cc-proxy --tail 50
+docker compose logs --tail 50 cc-proxy
 ```
 
 **Settings not applied:**
 ```bash
 # Verify settings file
-cat ~/.claude/settings.json | jq .env.ANTHROPIC_BASE_URL
+cat ~/.claude/settings.json | jq .env.ANTHROPIC_API_URL
 
 # Restore from backup
 cp ~/.claude/backups/settings.json.backup.<TIMESTAMP> ~/.claude/settings.json
@@ -109,10 +113,10 @@ cp ~/.claude/backups/settings.json.backup.<TIMESTAMP> ~/.claude/settings.json
 **Database connection issues:**
 ```bash
 # Check database is running
-docker ps | grep cc-db
+docker compose ps cc-db
 
 # Verify database connection
-docker exec cc-proxy printenv | grep DB_HOST
+docker compose exec cc-proxy printenv | grep DB_HOST
 ```
 
 ## Additional NPM Scripts
@@ -145,7 +149,7 @@ npm run db:seed
 ## Support
 
 For issues or questions:
-1. Check proxy logs: `docker logs cc-proxy`
+1. Check proxy logs: `docker compose logs cc-proxy`
 2. Verify settings: `cat ~/.claude/settings.json | jq .`
 3. Test proxy: `curl http://127.0.0.1:4181/health`
-4. Check database: `docker logs cc-db`
+4. Check database: `docker compose logs cc-db`

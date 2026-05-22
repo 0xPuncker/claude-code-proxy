@@ -80,7 +80,9 @@ If you prefer to configure Claude Code manually, edit `~/.claude/settings.json`:
 ```json
 {
   "env": {
-    "ANTHROPIC_API_URL": "http://127.0.0.1:4181"
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:4181",
+    "ANTHROPIC_API_URL": "http://127.0.0.1:4181",
+    "ANTHROPIC_API_KEY": "cc-proxy"
   }
 }
 ```
@@ -91,7 +93,7 @@ Then restart Claude Code.
 
 ### Claude Code isn't using the proxy
 
-1. Check that `~/.claude/settings.json` contains the proxy URL
+1. Check that `~/.claude/settings.json` contains `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_URL`, and `ANTHROPIC_API_KEY`
 2. Restart Claude Code completely (not just the terminal)
 3. Verify the proxy is running: `curl http://127.0.0.1:4181/health`
 

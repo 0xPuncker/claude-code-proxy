@@ -15,6 +15,7 @@ const __dirname = path.dirname(__filename);
 const CLAUDE_SETTINGS = path.join(process.env.HOME || process.env.USERPROFILE, '.claude', 'settings.json');
 const CC_PROXY_PORT = process.env.HOST_PROXY_PORT || process.env.PROXY_PORT || '4181';
 const CC_PROXY_URL = `http://127.0.0.1:${CC_PROXY_PORT}`;
+const CC_PROXY_API_KEY = process.env.CC_PROXY_API_KEY || 'cc-proxy';
 const BACKUP_DIR = path.join(process.env.HOME || process.env.USERPROFILE, '.claude', 'backups');
 const TIMESTAMP = new Date().toISOString().replace(/[:.]/g, '-').split('T')[0] + '_' +
                    new Date().toTimeString().split(' ')[0].replace(/:/g, '');
@@ -84,7 +85,9 @@ function main() {
     const settings = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS, 'utf8'));
 
     // Store current values for display
+    const oldApiUrl = settings.env?.ANTHROPIC_API_URL || 'not set';
     const oldBaseUrl = settings.env?.ANTHROPIC_BASE_URL || 'not set';
+    const oldApiKey = settings.env?.ANTHROPIC_API_KEY ? 'set' : 'not set';
     const oldAuthToken = settings.env?.ANTHROPIC_AUTH_TOKEN || 'not set';
 
     // Update settings
@@ -92,9 +95,14 @@ function main() {
       settings.env = {};
     }
 
+    // Claude Code 2.1.x routes API-key traffic through ANTHROPIC_BASE_URL.
+    // ANTHROPIC_API_URL alone can leave subscription/OAuth traffic on Claude's
+    // first-party path, where local subscription limits fire before cc-proxy.
     settings.env.ANTHROPIC_BASE_URL = CC_PROXY_URL;
+    settings.env.ANTHROPIC_API_URL = CC_PROXY_URL;
+    settings.env.ANTHROPIC_API_KEY = CC_PROXY_API_KEY;
 
-    // Remove auth token as it's handled by the proxy
+    // Remove conflicting auth token; the proxy handles upstream credentials.
     if (settings.env.ANTHROPIC_AUTH_TOKEN) {
       delete settings.env.ANTHROPIC_AUTH_TOKEN;
     }
@@ -109,12 +117,16 @@ function main() {
     // Display changes
     log(colors.blue, '📊 Configuration changes:');
     log(colors.green, 'BEFORE:');
+    console.log(`  ANTHROPIC_API_URL: ${oldApiUrl}`);
     console.log(`  ANTHROPIC_BASE_URL: ${oldBaseUrl}`);
+    console.log(`  ANTHROPIC_API_KEY: ${oldApiKey}`);
     console.log(`  ANTHROPIC_AUTH_TOKEN: ${oldAuthToken}`);
     console.log('');
 
     log(colors.green, 'AFTER:');
+    console.log(`  ANTHROPIC_API_URL: ${CC_PROXY_URL}`);
     console.log(`  ANTHROPIC_BASE_URL: ${CC_PROXY_URL}`);
+    console.log(`  ANTHROPIC_API_KEY: ${CC_PROXY_API_KEY}`);
     console.log(`  ANTHROPIC_AUTH_TOKEN: removed (handled by proxy)`);
     console.log('');
 
