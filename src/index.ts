@@ -125,6 +125,11 @@ const DEFAULT_CONFIG: ProxyConfig = {
     anthropicWeeklyLimit: parseInt(process.env.ANTHROPIC_WEEKLY_LIMIT || "0", 10),
     quotaWarningThreshold: parseInt(process.env.QUOTA_WARNING_THRESHOLD || "80", 10),
   },
+  contextWindow: {
+    enabled: process.env.CONTEXT_WINDOW_ENABLED !== "false",
+    limit: parseInt(process.env.CONTEXT_WINDOW_LIMIT || "200000", 10),
+    truncationThreshold: parseFloat(process.env.CONTEXT_WINDOW_TRUNCATION_THRESHOLD || "0.8"),
+  },
   database: process.env.DATABASE_URL ? {
     host: process.env.DB_HOST || "localhost",
     port: parseInt(process.env.DB_PORT || "5432", 10),
@@ -268,6 +273,7 @@ export class ClaudeCodeProxy {
       modelFallbackMap: { ...DEFAULT_CONFIG.modelFallbackMap, ...config.modelFallbackMap },
       timeout: { ...DEFAULT_CONFIG.timeout, ...config.timeout },
       circuitBreaker: { ...DEFAULT_CONFIG.circuitBreaker, ...config.circuitBreaker },
+      contextWindow: { ...DEFAULT_CONFIG.contextWindow, ...config.contextWindow },
       database: config.database || DEFAULT_CONFIG.database,
     };
   }
@@ -653,6 +659,121 @@ export class ClaudeCodeProxy {
     ];
 
     return rateLimitPatterns.some((pattern) => lower.includes(pattern));
+  }
+
+  /**
+   * Estimate token count from text (rough approximation: ~4 characters per token)
+   * This is a simple heuristic that works well for most English text
+   */
+  private estimateTokens(text: string): number {
+    if (!text) return 0;
+    // Approximate: 1 token ≈ 4 characters for English text
+    // This is conservative - actual tokenization may vary
+    return Math.ceil(text.length / 4);
+  }
+
+  /**
+   * Calculate total token count for messages array
+   */
+  private calculateMessageTokens(messages: unknown[] | undefined, system?: string): number {
+    let total = 0;
+    if (system) total += this.estimateTokens(system);
+    if (!Array.isArray(messages)) return total;
+    for (const msg of messages) {
+      if (msg && typeof msg === 'object') {
+        const content = (msg as Record<string, unknown>).content;
+        if (typeof content === 'string') {
+          total += this.estimateTokens(content);
+        } else if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block && typeof block === 'object') {
+              const text = (block as Record<string, unknown>).text;
+              if (typeof text === 'string') total += this.estimateTokens(text);
+            }
+          }
+        }
+      }
+    }
+    return total;
+  }
+
+  /**
+   * Truncate messages array to fit within context window limit
+   * Keeps system message and most recent messages
+   */
+  private truncateMessagesToFit(
+    bodyStr: string,
+    limit: number,
+    threshold: number
+  ): string {
+    try {
+      const body = JSON.parse(bodyStr);
+      const messages = body.messages;
+      const system = body.system;
+
+      if (!Array.isArray(messages) || messages.length === 0) return bodyStr;
+
+      const maxTokens = Math.floor(limit * threshold);
+      const currentTokens = this.calculateMessageTokens(messages, system);
+
+      if (currentTokens <= maxTokens) return bodyStr;
+
+      this.logger.warn(`Context window: ${currentTokens} tokens exceeds ${maxTokens} (${threshold * 100}% of ${limit}) - truncating messages`);
+
+      // Start from the end, keeping most recent messages
+      const truncatedMessages: unknown[] = [];
+      let runningTotal = this.estimateTokens(system || '');
+
+      // Add system message to truncated body if present
+      const truncatedBody: Record<string, unknown> = { ...body };
+      if (system) truncatedBody.system = system;
+
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (!msg || typeof msg !== 'object') continue;
+
+        const content = (msg as Record<string, unknown>).content;
+        let msgTokens = 0;
+        if (typeof content === 'string') {
+          msgTokens = this.estimateTokens(content);
+        } else if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block && typeof block === 'object') {
+              const text = (block as Record<string, unknown>).text;
+              if (typeof text === 'string') msgTokens += this.estimateTokens(text);
+            }
+          }
+        }
+
+        if (runningTotal + msgTokens > maxTokens) {
+          break; // Stop adding messages if we'd exceed the limit
+        }
+
+        truncatedMessages.unshift(msg);
+        runningTotal += msgTokens;
+      }
+
+      truncatedBody.messages = truncatedMessages;
+      const truncated = JSON.stringify(truncatedBody);
+
+      this.logger.info(`Truncated: ${messages.length} → ${truncatedMessages.length} messages (${currentTokens} → ${runningTotal} tokens)`);
+
+      return truncated;
+    } catch {
+      return bodyStr;
+    }
+  }
+
+  /**
+   * Apply context window management to request body if enabled
+   */
+  private maybeTruncateForContextWindow(reqBody: string): string {
+    const cwConfig = this.config.contextWindow;
+    if (!cwConfig?.enabled) return reqBody;
+    if (!cwConfig.limit || cwConfig.limit <= 0) return reqBody;
+    if (!cwConfig.truncationThreshold || cwConfig.truncationThreshold <= 0 || cwConfig.truncationThreshold > 1) return reqBody;
+
+    return this.truncateMessagesToFit(reqBody, cwConfig.limit, cwConfig.truncationThreshold);
   }
 
   private classifyProviderError(
@@ -2228,6 +2349,11 @@ export class ClaudeCodeProxy {
           anthropicWeeklyLimit: this.config.circuitBreaker?.anthropicWeeklyLimit,
           quotaWarningThreshold: this.config.circuitBreaker?.quotaWarningThreshold
         },
+        contextWindow: {
+          enabled: this.config.contextWindow?.enabled !== false,
+          limit: this.config.contextWindow?.limit,
+          truncationThreshold: this.config.contextWindow?.truncationThreshold
+        },
         timeout: {
           requestMs: this.config.timeout?.requestMs,
           streamingMs: this.config.timeout?.streamingMs,
@@ -2269,14 +2395,17 @@ export class ClaudeCodeProxy {
       // Invalid JSON, assume non-streaming
     }
 
+    // Apply context window truncation if enabled
+    const processedReqBody = this.maybeTruncateForContextWindow(reqBody);
+
     if (!isStreaming) {
-      const res = await this.proxyRequest(reqBody, reqHeaders, reqPath, reqMethod);
+      const res = await this.proxyRequest(processedReqBody, reqHeaders, reqPath, reqMethod);
       clientRes.writeHead(res.status, res.headers);
       clientRes.end(res.body);
       return;
     }
 
-    await this.handleStreamingRequest(reqBody, reqHeaders, reqPath, reqMethod, clientRes);
+    await this.handleStreamingRequest(processedReqBody, reqHeaders, reqPath, reqMethod, clientRes);
   }
 
   /**

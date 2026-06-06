@@ -53,6 +53,11 @@ export interface ProxyConfig {
     anthropicWeeklyLimit?: number; // Weekly token limit for Anthropic (0 = no limit)
     quotaWarningThreshold?: number; // Percentage to trigger fallback (default: 80)
   };
+  contextWindow?: {
+    limit?: number;              // Context window limit in tokens (default: 200000 for Claude)
+    truncationThreshold?: number; // Percentage of limit to trigger truncation (default: 0.8 = 80%)
+    enabled?: boolean;            // Enable automatic message truncation (default: true)
+  };
 }
 
 /**
