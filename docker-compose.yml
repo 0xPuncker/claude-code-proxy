@@ -16,6 +16,8 @@ services:
       - API_RETRY_DELAY_MS=${API_RETRY_DELAY_MS:-2000}
       - NODE_ENV=${NODE_ENV:-production}
       - CLAUDE_CREDENTIALS_PATH=/app/credentials.json
+      # Long-lived token from `claude setup-token` (takes precedence over the mounted file)
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@${DB_HOST:-cc-db}:5432/${POSTGRES_DB:-claude_proxy}
     volumes:
       - ~/.claude/claude-credentials.json:/app/credentials.json:rw

@@ -1,8 +1,34 @@
-# Auto-Sync Claude Credentials
+# Claude Subscription Credentials
 
-The proxy needs fresh Claude OAuth credentials to use your subscription (savings plan) instead of API keys. This setup automatically syncs credentials from the macOS Keychain to a file that the proxy container reads.
+The proxy needs Claude OAuth credentials to use your subscription (Pro/Max) instead of API keys. There are two ways to provide them.
 
-## How It Works
+## Recommended: Static long-lived token (`claude setup-token`)
+
+For containers and headless setups, mint a **~1-year** OAuth token once and pass it as an environment variable. This avoids the macOS Keychain entirely, so it keeps working when your Mac is asleep or logged out, and there's nothing to sync.
+
+```bash
+# On the host (interactive, opens a browser for OAuth):
+claude setup-token
+# Copy the printed token into your .env.docker:
+#   CLAUDE_CODE_OAUTH_TOKEN=<paste-token-here>
+```
+
+Then start the stack normally. The proxy reads `CLAUDE_CODE_OAUTH_TOKEN` and **prefers it over the mounted credentials file**. Confirm it was picked up:
+
+```bash
+curl -s http://127.0.0.1:4181/config | python3 -c "import sys,json; print(json.load(sys.stdin)['providers']['claudeSubscription']['authMode'])"
+# → static-token
+```
+
+Regenerate the token once a year (or whenever it's revoked) by re-running `claude setup-token` and updating the env var.
+
+---
+
+## Legacy: Keychain → file sync (interactive host only)
+
+> This is the older approach. It only works on a macOS host where a GUI login session can read the Keychain, and it can go stale under `launchd`. Prefer the static token above for containers. When `CLAUDE_CODE_OAUTH_TOKEN` is unset, the proxy falls back to the mounted credentials file described below.
+
+### How It Works
 
 1. **macOS Keychain** stores your Claude OAuth token (service: `Claude Code-credentials`)
 2. **sync-credentials.sh** extracts the token and writes to `~/.claude/claude-credentials.json`

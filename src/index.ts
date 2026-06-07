@@ -78,6 +78,7 @@ const DEFAULT_CONFIG: ProxyConfig = {
       path.join(os.homedir(), ".claude", ".credentials.json")
     ),
     enabled: process.env.CLAUDE_SUBSCRIPTION_ENABLED !== "false",
+    oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN || "",
   },
   modelFallbackMap: {
     // Anthropic Claude models (use directly)
@@ -329,6 +330,12 @@ export class ClaudeCodeProxy {
   }
 
   private async readClaudeOAuthToken(retries = 3): Promise<string | undefined> {
+    // A static long-lived token (`claude setup-token`) takes precedence over the
+    // credentials file. It has no readable expiry, so treat it as always-valid;
+    // a revoked/expired token falls through the normal 401 re-read + fallback path.
+    const staticToken = this.config.claudeSubscription.oauthToken;
+    if (staticToken) return staticToken;
+
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
         const raw = fs.readFileSync(this.config.claudeSubscription.credentialsPath, "utf-8");
@@ -2328,6 +2335,7 @@ export class ClaudeCodeProxy {
             enabled: subEnabled,
             baseUrl: this.config.claudeSubscription.baseUrl,
             credentialsPath: this.config.claudeSubscription.credentialsPath,
+            authMode: this.config.claudeSubscription.oauthToken ? "static-token" : "credentials-file",
             priority: 2
           },
           zai: {
@@ -2658,7 +2666,8 @@ es.onerror = () => {
     }
 
     console.log(`  │   ├─ 1. ${hasAnthropicKey ? `\x1b[32m✓\x1b[0m Anthropic API ${anthropicState}` : '\x1b[90m✗ Anthropic API (no key)\x1b[0m'}`);
-    console.log(`  │   ├─ 2. ${subEnabled ? '\x1b[32m✓\x1b[0m Claude Subscription' : '\x1b[90m✗ Claude Subscription (disabled)\x1b[0m'}`);
+    const subAuthMode = this.config.claudeSubscription.oauthToken ? ' \x1b[90m(static token)\x1b[0m' : '';
+    console.log(`  │   ├─ 2. ${subEnabled ? `\x1b[32m✓\x1b[0m Claude Subscription${subAuthMode}` : '\x1b[90m✗ Claude Subscription (disabled)\x1b[0m'}`);
     console.log(`  │   ├─ 3. ${hasZaiKey ? `\x1b[32m✓\x1b[0m Z.AI ${zaiState}` : '\x1b[90m✗ Z.AI (no key)\x1b[0m'}`);
     console.log(`  │   └─ 4. ${hasOpenRouterKey ? `\x1b[32m✓\x1b[0m OpenRouter ${openRouterState}` : '\x1b[90m✗ OpenRouter (no key)\x1b[0m'}`);
 
