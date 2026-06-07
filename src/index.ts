@@ -946,6 +946,9 @@ export class ClaudeCodeProxy {
   private recordClaudeSubscriptionFailure(status: number, body: Buffer): void {
     const errorType = this.classifyProviderError(status, body);
     if (errorType === "rate_limit" || errorType === "context_window" || errorType === "auth_error") {
+      if (errorType === "context_window") {
+        this.logger.warn(`Claude subscription context window limit exceeded`);
+      }
       this.enterClaudeSubscriptionCooldown(errorType);
       return;
     }
@@ -1325,7 +1328,7 @@ export class ClaudeCodeProxy {
     if (response.status >= 400) {
       errorType = this.classifyProviderError(response.status, response.body);
       if (errorType === "context_window") {
-        this.logger.debug(`  Context window error detected for ${provider}`);
+        this.logger.warn(`  ⚠️  Context window error from ${provider.toUpperCase()} - message too long`);
       }
     }
 
