@@ -451,7 +451,7 @@ describe("Claude Code Proxy fallback chain", () => {
       await clientRes.ended;
 
       assert.equal(clientRes.statusCode, 200);
-      assert.match(Buffer.concat(clientRes.chunks).toString(), /"model":"glm-4\.7"/);
+      assert.match(Buffer.concat(clientRes.chunks).toString(), /"model":"glm-5\.2"/);
       assert.equal(proxy.getClaudeSubscriptionState().state, "cooling_down");
     } finally {
       proxy?.providerHealth.destroy();

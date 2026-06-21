@@ -22,6 +22,7 @@ export interface ProxyConfig {
     baseUrl: string;
     credentialsPath: string;
     enabled: boolean;
+    oauthToken?: string; // static long-lived token from `claude setup-token`
   };
   modelFallbackMap: Record<string, string>;
   fallbackOnCodes: number[];

@@ -497,10 +497,13 @@ export class ProviderHealth {
    */
   private mapClaudeToGLM(claudeModel: string): string {
     const claudeLower = claudeModel.toLowerCase();
-    if (claudeLower.includes("opus")) return "glm-4";
-    if (claudeLower.includes("sonnet")) return "glm-4";
-    if (claudeLower.includes("haiku")) return "glm-3-air";
-    return "glm-4"; // Default to GLM 4
+    // Map Opus models to latest GLM flagship
+    if (claudeLower.includes("opus")) return "glm-5.2";
+    // Map Sonnet models to latest GLM
+    if (claudeLower.includes("sonnet")) return "glm-5.2";
+    // Map Haiku models to faster/cheaper GLM
+    if (claudeLower.includes("haiku")) return "glm-4.5-air";
+    return "glm-5.2"; // Default to GLM 5.2
   }
 
   /**
@@ -508,9 +511,11 @@ export class ProviderHealth {
    */
   private mapGLMToClaude(glmModel: string): string {
     const glmLower = glmModel.toLowerCase();
-    if (glmLower === "glm-4" || glmLower === "glm-4-plus") return "claude-sonnet-4-6";
-    if (glmLower.includes("-air") || glmLower.includes("-turbo")) return "claude-haiku-4-5";
-    return "claude-sonnet-4-6"; // Default to Sonnet
+    // Latest GLM flagship maps to Opus
+    if (glmLower === "glm-5.2" || glmLower === "glm-5.1" || glmLower === "glm-5") return "claude-opus-4-8";
+    if (glmLower === "glm-4" || glmLower === "glm-4-plus") return "claude-opus-4-8";
+    if (glmLower.includes("-air") || glmLower.includes("-turbo")) return "claude-haiku-4-6";
+    return "claude-opus-4-8"; // Default to Opus
   }
 
   /**
@@ -519,6 +524,7 @@ export class ProviderHealth {
   private mapClaudeToOpenRouter(claudeModel: string): string {
     const claudeLower = claudeModel.toLowerCase();
     if (claudeLower.includes("haiku")) return "~anthropic/claude-haiku-latest";
+    if (claudeLower.includes("opus")) return "~anthropic/claude-opus-latest";
     return "~anthropic/claude-sonnet-latest";
   }
 

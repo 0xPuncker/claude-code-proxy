@@ -44,14 +44,14 @@ describe("Model Conversion - Claude Models", () => {
     const result = providerHealth.getBestProviderAndModel("claude-sonnet-4-6");
 
     assert.strictEqual(result.provider, "zai");
-    assert.strictEqual(result.model, "glm-4");
+    assert.strictEqual(result.model, "glm-5.2");
     assert.strictEqual(result.wasConverted, true);
     assert.ok(result.conversionReason?.includes("converted"));
     assert.ok(result.conversionReason?.includes("claude-sonnet-4-6"));
-    assert.ok(result.conversionReason?.includes("glm-4"));
+    assert.ok(result.conversionReason?.includes("glm-5.2"));
   });
 
-  it("should convert Claude Opus to GLM 4", () => {
+  it("should convert Claude Opus to GLM 5.2", () => {
     providerHealth.resetAll();
     for (let i = 0; i < 5; i++) {
       providerHealth.recordFailure("anthropic", "other");
@@ -60,11 +60,11 @@ describe("Model Conversion - Claude Models", () => {
     const result = providerHealth.getBestProviderAndModel("claude-opus-4-5");
 
     assert.strictEqual(result.provider, "zai");
-    assert.strictEqual(result.model, "glm-4");
+    assert.strictEqual(result.model, "glm-5.2");
     assert.strictEqual(result.wasConverted, true);
   });
 
-  it("should convert Claude Haiku to GLM 3-Air", () => {
+  it("should convert Claude Haiku to GLM 4.5-Air", () => {
     providerHealth.resetAll();
     for (let i = 0; i < 5; i++) {
       providerHealth.recordFailure("anthropic", "other");
@@ -73,7 +73,7 @@ describe("Model Conversion - Claude Models", () => {
     const result = providerHealth.getBestProviderAndModel("claude-haiku-4-5");
 
     assert.strictEqual(result.provider, "zai");
-    assert.strictEqual(result.model, "glm-3-air");
+    assert.strictEqual(result.model, "glm-4.5-air");
     assert.strictEqual(result.wasConverted, true);
   });
 
@@ -105,7 +105,7 @@ describe("Model Conversion - Claude Models", () => {
     const result = providerHealth.getBestProviderAndModel("claude-opus-4-5");
 
     assert.strictEqual(result.provider, "openrouter");
-    assert.strictEqual(result.model, "~anthropic/claude-sonnet-latest");
+    assert.strictEqual(result.model, "~anthropic/claude-opus-latest");
   });
 
   it("should map Claude Haiku to OpenRouter format", () => {
@@ -159,10 +159,10 @@ describe("Model Conversion - GLM Models", () => {
     const result = providerHealth.getBestProviderAndModel("glm-4");
 
     assert.strictEqual(result.provider, "anthropic");
-    assert.strictEqual(result.model, "claude-sonnet-4-6");
+    assert.strictEqual(result.model, "claude-opus-4-8");
     assert.strictEqual(result.wasConverted, true);
     assert.ok(result.conversionReason?.includes("glm-4"));
-    assert.ok(result.conversionReason?.includes("claude-sonnet-4-6"));
+    assert.ok(result.conversionReason?.includes("claude-opus-4-8"));
   });
 
   it("should convert GLM 3-Air to Claude Haiku", () => {
@@ -173,7 +173,7 @@ describe("Model Conversion - GLM Models", () => {
     const result = providerHealth.getBestProviderAndModel("glm-3-air");
 
     assert.strictEqual(result.provider, "anthropic");
-    assert.strictEqual(result.model, "claude-haiku-4-5");
+    assert.strictEqual(result.model, "claude-haiku-4-6");
     assert.strictEqual(result.wasConverted, true);
   });
 
@@ -231,13 +231,13 @@ describe("Model Conversion - Complete Fallback Chain", () => {
     assert.strictEqual(result.model, "claude-sonnet-4-6");
     assert.strictEqual(result.wasConverted, false);
 
-    // Anthropic fails → Z.AI + GLM 4
+    // Anthropic fails → Z.AI + GLM 5.2
     for (let i = 0; i < 5; i++) {
       providerHealth.recordFailure("anthropic", "other");
     }
     result = providerHealth.getBestProviderAndModel("claude-sonnet-4-6");
     assert.strictEqual(result.provider, "zai");
-    assert.strictEqual(result.model, "glm-4");
+    assert.strictEqual(result.model, "glm-5.2");
     assert.strictEqual(result.wasConverted, true);
 
     // Z.AI fails → OpenRouter + OpenRouter Claude
@@ -257,13 +257,13 @@ describe("Model Conversion - Complete Fallback Chain", () => {
     assert.strictEqual(result.model, "glm-4");
     assert.strictEqual(result.wasConverted, false);
 
-    // Z.AI fails → Anthropic + Claude Sonnet
+    // Z.AI fails → Anthropic + Claude Opus
     for (let i = 0; i < 5; i++) {
       providerHealth.recordFailure("zai", "other");
     }
     result = providerHealth.getBestProviderAndModel("glm-4");
     assert.strictEqual(result.provider, "anthropic");
-    assert.strictEqual(result.model, "claude-sonnet-4-6");
+    assert.strictEqual(result.model, "claude-opus-4-8");
     assert.strictEqual(result.wasConverted, true);
 
     // Anthropic fails → OpenRouter + GLM 4
@@ -305,7 +305,7 @@ describe("Model Conversion - Provider Recovery", () => {
 
     let result = providerHealth.getBestProviderAndModel("claude-sonnet-4-6");
     assert.strictEqual(result.provider, "zai");
-    assert.strictEqual(result.model, "glm-4");
+    assert.strictEqual(result.model, "glm-5.2");
     assert.strictEqual(result.wasConverted, true);
 
     // Anthropic recovers (reset metrics to simulate recovery after cooldown)
@@ -325,7 +325,7 @@ describe("Model Conversion - Provider Recovery", () => {
 
     let result = providerHealth.getBestProviderAndModel("glm-4");
     assert.strictEqual(result.provider, "anthropic");
-    assert.strictEqual(result.model, "claude-sonnet-4-6");
+    assert.strictEqual(result.model, "claude-opus-4-8");
     assert.strictEqual(result.wasConverted, true);
 
     // Z.AI recovers (reset metrics to simulate recovery after cooldown)
@@ -349,7 +349,7 @@ describe("Model Conversion - API Key Validation", () => {
     const result = providerHealth.getBestProviderAndModel("claude-sonnet-4-6");
 
     assert.strictEqual(result.provider, "zai");
-    assert.strictEqual(result.model, "glm-4");
+    assert.strictEqual(result.model, "glm-5.2");
     assert.strictEqual(result.wasConverted, true);
     assert.ok(result.conversionReason?.includes("Anthropic unavailable"));
 
@@ -366,7 +366,7 @@ describe("Model Conversion - API Key Validation", () => {
     const result = providerHealth.getBestProviderAndModel("glm-4");
 
     assert.strictEqual(result.provider, "anthropic");
-    assert.strictEqual(result.model, "claude-sonnet-4-6");
+    assert.strictEqual(result.model, "claude-opus-4-8");
     assert.strictEqual(result.wasConverted, true);
     assert.ok(result.conversionReason?.includes("Z.AI unavailable"));
 
@@ -408,7 +408,7 @@ describe("Model Conversion - Quota Management", () => {
     const result = providerHealth.getBestProviderAndModel("claude-sonnet-4-6");
 
     assert.strictEqual(result.provider, "zai");
-    assert.strictEqual(result.model, "glm-4");
+    assert.strictEqual(result.model, "glm-5.2");
     assert.strictEqual(result.wasConverted, true);
 
     providerHealth.destroy();
@@ -432,7 +432,7 @@ describe("Model Conversion - Quota Management", () => {
     const result = providerHealth.getBestProviderAndModel("glm-4");
 
     assert.strictEqual(result.provider, "anthropic");
-    assert.strictEqual(result.model, "claude-sonnet-4-6");
+    assert.strictEqual(result.model, "claude-opus-4-8");
     assert.strictEqual(result.wasConverted, true);
 
     providerHealth.destroy();

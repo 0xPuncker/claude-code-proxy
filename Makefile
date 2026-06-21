@@ -18,23 +18,23 @@ dev: ## Run in development mode
 test: ## Run tests
 	npm test
 
-docker-build: ## Build Docker image
-	docker-compose build
+podman-build: ## Build image with podman compose
+	podman compose build
 
-docker-run: ## Run Docker container
-	docker-compose up -d
+podman-run: ## Run containers with podman compose
+	podman compose up -d
 
-docker-logs: ## Show Docker logs
-	docker-compose logs -f
+podman-logs: ## Show container logs
+	podman compose logs -f
 
-docker-stop: ## Stop Docker containers
-	docker-compose down
+podman-stop: ## Stop containers
+	podman compose down
 
-docker-clean: ## Remove Docker containers and images
-	docker-compose down -v
-	docker rmi claude-code-proxy-cc-proxy:latest 2>/dev/null || true
+podman-clean: ## Remove containers and images
+	podman compose down -v
+	podman rmi claude-code-proxy-cc-proxy:latest 2>/dev/null || true
 
-docker-restart: docker-stop docker-run ## Restart Docker containers
+podman-restart: podman-stop podman-run ## Restart containers
 
 lint: ## Run linter
 	npm run lint
