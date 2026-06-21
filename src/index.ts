@@ -82,15 +82,19 @@ const DEFAULT_CONFIG: ProxyConfig = {
   },
   modelFallbackMap: {
     // Anthropic Claude models (use directly)
-    "claude-sonnet-4-6": "claude-sonnet-4-6",
+    "claude-opus-4-8": "claude-opus-4-8", // Latest Opus (April 2026)
+    "claude-opus-4-7": "claude-opus-4-7", // Previous Opus
     "claude-opus-4-6": "claude-opus-4-6",
+    "claude-sonnet-4-6": "claude-sonnet-4-6",
+    "claude-haiku-4-6": "claude-haiku-4-6", // Newer Haiku
     "claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001",
     "claude-sonnet-4-5": "claude-sonnet-4-5",
     // Legacy Claude models -> latest versions
-    "claude-opus": "claude-opus-4-6",
+    "claude-opus": "claude-opus-4-8",
     "claude-sonnet": "claude-sonnet-4-6",
-    "claude-haiku": "claude-haiku-4-5-20251001",
+    "claude-haiku": "claude-haiku-4-6",
     // Z.AI GLM models (use directly)
+    "glm-5.2": "glm-5.2", // Latest flagship (June 2026)
     "glm-5.1": "glm-5.1",
     "glm-5": "glm-5",
     "glm-5-turbo": "glm-5-turbo",
@@ -104,7 +108,7 @@ const DEFAULT_CONFIG: ProxyConfig = {
     "glm-4.5-air": "glm-4.5-air",
     "glm-4-32b": "glm-4-32b",
     // Legacy GLM models -> latest
-    "glm-4": "glm-4.7",
+    "glm-4": "glm-5.2", // Now points to GLM-5.2
     // Fallback to OpenRouter free models (when others fail)
     "openrouter-free": "google/gemma-3-27b-it:free",
   },
@@ -873,13 +877,15 @@ export class ClaudeCodeProxy {
 
     const modelLower = requestedModel.toLowerCase();
     if (provider === "zai" && modelLower.startsWith("claude-")) {
+      // Map Claude models to GLM for Z.AI
       if (modelLower.includes("haiku")) return "glm-4.5-air";
-      return "glm-4";
+      return "glm-5.2"; // Map Opus/Sonnet to latest GLM
     }
 
     if (provider === "anthropic" && modelLower.startsWith("glm-")) {
+      // Map GLM models to Claude for Anthropic API
       if (modelLower.includes("-air") || modelLower.includes("-turbo")) {
-        return "claude-haiku-4-5-20251001";
+        return "claude-haiku-4-6";
       }
       return "claude-sonnet-4-6";
     }
@@ -1335,7 +1341,7 @@ export class ClaudeCodeProxy {
     if (response.status >= 400) {
       errorType = this.classifyProviderError(response.status, response.body);
       if (errorType === "context_window") {
-        this.logger.warn(`  ⚠️  Context window error from ${provider.toUpperCase()} - message too long`);
+        this.logger.warn(`  ⚠️  Context window error from ${provider.toUpperCase()} - message too long (consider reducing message size or enabling CONTEXT_WINDOW_ENABLED=true)`);
       }
     }
 
@@ -1356,6 +1362,33 @@ export class ClaudeCodeProxy {
     const requestId = this.generateRequestId();
     const cbEnabled = this.config.circuitBreaker?.enabled !== false;
 
+    // For Claude models, ALWAYS try subscription first if available
+    const modelLower = (model || '').toLowerCase();
+    const isClaudeModel = modelLower.startsWith('claude-') || modelLower === 'claude';
+
+    if (isClaudeModel && this.canTryClaudeSubscription()) {
+      const oauthToken = await this.readClaudeOAuthToken();
+      if (oauthToken) {
+        this.logger.info(`[${requestId}] → 🎟️  Claude Subscription ▸ ${model || 'unknown'} (primary for Claude models)`);
+        const subResult = await this.trySubscriptionRequest(reqBody, reqHeaders, reqPath, reqMethod);
+        if (subResult && subResult.status < 400) {
+          this.logger.ok(`[${requestId}] ← ✅ SUBSCRIPTION ${subResult.status}`);
+          await this.trackRequestMetrics(reqMethod, reqPath, startTime, subResult.status, true, 'anthropic', model, false, subResult.body);
+          return subResult;
+        }
+        // Subscription failed - will try fallback below based on error type
+        const subErrorType = subResult ? this.classifyProviderError(subResult.status, subResult.body) : 'other';
+        if (subErrorType === 'auth_error') {
+          this.logger.error(`[${requestId}] ← ❌ Subscription auth error - check credentials. Not falling back.`);
+          if (subResult) {
+            await this.trackRequestMetrics(reqMethod, reqPath, startTime, subResult.status, false, 'anthropic', model, false, subResult.body);
+          }
+          return subResult || { status: 401, body: Buffer.from('{"error":{"message":"Authentication failed"}}'), headers: {} };
+        }
+        this.logger.warn(`[${requestId}] ← ⚠️  Subscription failed (${subErrorType}) - trying fallback providers`);
+      }
+    }
+
     // Determine best provider+model (circuit breaker enabled)
     const providerAndModel = cbEnabled ? this.providerHealth.getBestProviderAndModel(model) : null;
     let selectedProvider: 'anthropic' | 'zai' | 'openrouter' | null = providerAndModel?.provider ?? 'anthropic';
@@ -1364,23 +1397,6 @@ export class ClaudeCodeProxy {
     if (!selectedProvider) {
       this.logger.warn(`No healthy provider available for model ${model || 'unknown'}, trying Anthropic as fallback`);
       selectedProvider = 'anthropic';
-    }
-
-    // Check if we should prefer Claude subscription over Z.AI
-    // (when Anthropic has no API key but subscription is available)
-    if (selectedProvider === 'zai' && this.canTryClaudeSubscription()) {
-      const oauthToken = await this.readClaudeOAuthToken();
-      if (oauthToken && !this.config.anthropic.apiKey) {
-        this.logger.info(`Claude subscription available - preferring subscription over Z.AI`);
-        // Skip provider selection and use subscription directly
-        const subResult = await this.trySubscriptionRequest(reqBody, reqHeaders, reqPath, reqMethod);
-        if (subResult) {
-          this.logger.ok(`[${requestId}] ✓ SUBSCRIPTION ${subResult.status}`);
-          await this.trackRequestMetrics(reqMethod, reqPath, startTime, subResult.status, true, 'anthropic', model, false, subResult.body);
-          return subResult;
-        }
-        // If subscription fails, continue with Z.AI as planned
-      }
     }
 
     // Apply model conversion if provider selected a different model
@@ -1449,6 +1465,13 @@ export class ClaudeCodeProxy {
         this.logger.ok(`[${requestId}] ✓ SUBSCRIPTION ${subResult.status}`);
         await this.trackRequestMetrics(reqMethod, reqPath, startTime, subResult.status, true, 'anthropic', model, false, subResult.body);
         return subResult;
+      }
+
+      // Skip fallback for auth errors - these are configuration issues, not transient failures
+      if (errorType === 'auth_error') {
+        this.logger.error(`[${requestId}] ← ❌ Authentication error - check API keys/credentials. Not falling back.`);
+        await this.trackRequestMetrics(reqMethod, reqPath, startTime, response.status, false, primaryProvider, model, false, response.body);
+        return response;
       }
 
       const fallbackProviders = this.getFallbackProviders(primaryProvider);
@@ -1639,20 +1662,22 @@ export class ClaudeCodeProxy {
     const cbEnabled = this.config.circuitBreaker?.enabled !== false;
     let headersSent = false;
 
-    // Determine best provider based on model
+    // For Claude models, ALWAYS try subscription first if available
+    const modelLower = (model || '').toLowerCase();
+    const isClaudeModel = modelLower.startsWith('claude-') || modelLower === 'claude';
+
+    // Determine best provider based on model (used as fallback if subscription fails)
     let selectedProvider = cbEnabled ? this.providerHealth.getBestProviderForModel(model) : 'anthropic';
     if (!selectedProvider) {
       this.logger.warn(`No healthy provider available for model ${model || 'unknown'}, defaulting to Anthropic`);
       selectedProvider = 'anthropic';
     }
 
-    // Check if we should prefer Claude subscription over Z.AI
-    // (when Anthropic has no API key but subscription is available)
-    if (selectedProvider === 'zai' && this.canTryClaudeSubscription()) {
+    // For Claude models, try subscription first
+    if (isClaudeModel && this.canTryClaudeSubscription()) {
       const oauthToken = await this.readClaudeOAuthToken();
-      if (oauthToken && !this.config.anthropic.apiKey) {
-        this.logger.info(`[${requestId}] → Claude subscription preferred over Z.AI`);
-        // Try subscription first
+      if (oauthToken) {
+        this.logger.info(`[${requestId}] → 🎟️  Claude Subscription ▸ ${model || 'unknown'} (primary for Claude models)`);
         const cleanedPath = this.cleanPath(reqPath);
         const cleanedBody = this.cleanBody(reqBody, "subscription");
 
@@ -1766,22 +1791,42 @@ export class ClaudeCodeProxy {
           const subStatus = subRes.statusCode || 0;
           if (subStatus >= 400) {
             const subErrorBody = await this.readIncomingBody(subRes);
+            const errorType = this.classifyProviderError(subStatus, subErrorBody);
             this.recordClaudeSubscriptionFailure(subStatus, subErrorBody);
+
+            // Skip fallback for auth errors
+            if (errorType === 'auth_error') {
+              this.logger.error(`[${requestId}] ← ❌ Subscription auth error - check credentials. Not falling back.`);
+              if (!clientRes.headersSent) {
+                clientRes.writeHead(subStatus, { "Content-Type": "application/json" });
+                clientRes.end(subErrorBody);
+              }
+              return;
+            }
+
             this.logger.warn(
               `← Claude subscription ❌ ${subStatus}: ${subErrorBody
                 .toString()
-                .slice(0, 300)} — falling back to Z.AI`
+                .slice(0, 300)} — trying fallback providers`
             );
           }
         } catch (err) {
           const semanticError = err as Error & { streamingErrorType?: ProviderErrorType; errorBody?: Buffer };
           if (semanticError.streamingErrorType) {
             this.recordClaudeSubscriptionFailure(429, semanticError.errorBody || Buffer.from(""));
+            // Skip fallback for auth errors
+            if (semanticError.streamingErrorType === 'auth_error') {
+              this.logger.error(`[${requestId}] ← ❌ Subscription auth error - check credentials. Not falling back.`);
+              if (!clientRes.headersSent) {
+                clientRes.writeHead(401, { "Content-Type": "application/json" });
+                clientRes.end(JSON.stringify({ error: { message: "Authentication failed - check credentials" } }));
+              }
+              return;
+            }
           } else {
             this.enterClaudeSubscriptionCooldown("stream error");
           }
-          this.logger.warn(`← Claude subscription stream failed: ${err instanceof Error ? err.message : 'Unknown'} — falling back to Z.AI`);
-          // Continue with Z.AI
+          this.logger.warn(`← Claude subscription stream failed: ${err instanceof Error ? err.message : 'Unknown'} — trying fallback providers`);
         }
       }
     }
@@ -1854,8 +1899,11 @@ export class ClaudeCodeProxy {
             this.providerHealth.recordFailure(provider, errorType);
           }
 
+          const contextMsg = errorType === "context_window"
+            ? ` (message too long - enable CONTEXT_WINDOW_ENABLED=true)`
+            : "";
           this.logger.warn(
-            `[${requestId}] ← ⚠️  ${provider.toUpperCase()} ${statusCode}: ${errorBody
+            `[${requestId}] ← ⚠️  ${provider.toUpperCase()} ${statusCode}${contextMsg}: ${errorBody
               .toString()
               .slice(0, 300)} — trying fallback`
           );
@@ -1969,6 +2017,16 @@ export class ClaudeCodeProxy {
     // Try primary provider
     const primaryResult = await executeStream(primaryProvider);
     if (primaryResult.success) {
+      return;
+    }
+
+    // Skip fallback for auth errors - these are configuration issues, not transient failures
+    if (primaryResult.errorType === 'auth_error') {
+      this.logger.error(`[${requestId}] ← ❌ Authentication error - check API keys/credentials. Not falling back.`);
+      if (!clientRes.headersSent) {
+        clientRes.writeHead(401, { "Content-Type": "application/json" });
+        clientRes.end(JSON.stringify({ error: { message: "Authentication failed - check API keys or credentials" } }));
+      }
       return;
     }
 
@@ -2712,11 +2770,12 @@ es.onerror = () => {
     console.log('\x1b[1m\x1b[34m' + `● Model Configuration (${modelCount} mappings)` + '\x1b[0m');
 
     const notableModels = [
+      'claude-opus-4-8',
+      'claude-opus',
       'claude-sonnet-4-6',
-      'claude-opus-4-6',
-      'claude-haiku-4-5-20251001',
-      'glm-5',
-      'glm-4.7'
+      'claude-haiku-4-6',
+      'glm-5.2',
+      'glm-4'
     ];
 
     console.log(`  └─ Key mappings:`);

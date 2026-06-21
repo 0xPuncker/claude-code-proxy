@@ -1,10 +1,10 @@
 services:
   # Claude Code Proxy
   cc-proxy:
-    container_name: cc-proxy
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: ${PROXY_CONTAINER_NAME:-cc-proxy}
     ports:
       - "${HOST_PROXY_PORT:-4181}:4181"
     env_file:
@@ -14,11 +14,9 @@ services:
       - API_STREAMING_TIMEOUT_MS=${API_STREAMING_TIMEOUT_MS:-18000000}
       - API_MAX_RETRIES=${API_MAX_RETRIES:-5}
       - API_RETRY_DELAY_MS=${API_RETRY_DELAY_MS:-2000}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
       - NODE_ENV=${NODE_ENV:-production}
       - CLAUDE_CREDENTIALS_PATH=/app/credentials.json
-      # Long-lived token from `claude setup-token` (takes precedence over the mounted file)
-      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@${DB_HOST:-cc-db}:5432/${POSTGRES_DB:-claude_proxy}
     volumes:
       - ~/.claude/claude-credentials.json:/app/credentials.json:rw
     healthcheck:
@@ -43,8 +41,8 @@ services:
 
   # PostgreSQL Database
   cc-db:
-    container_name: cc-db
     image: postgres:${POSTGRES_VERSION:-15}-alpine
+    container_name: ${DB_CONTAINER_NAME:-cc-db}
     environment:
       - POSTGRES_DB=${POSTGRES_DB:-claude_proxy}
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
@@ -59,22 +57,6 @@ services:
       interval: ${DB_HEALTHCHECK_INTERVAL:-10s}
       timeout: ${DB_HEALTHCHECK_TIMEOUT:-5s}
       retries: ${DB_HEALTHCHECK_RETRIES:-5}
-    restart: ${RESTART_POLICY:-unless-stopped}
-    networks:
-      - claude-network
-
-  # Adminer (Database Management UI)
-  cc-adminer:
-    container_name: cc-adminer
-    image: adminer:${ADMINER_VERSION:-latest}
-    ports:
-      - "${ADMINER_PORT:-8080}:8080"
-    environment:
-      - ADMINER_DEFAULT_SERVER=${ADMINER_DEFAULT_SERVER:-cc-db}
-      - ADMINER_DESIGN=${ADMINER_DESIGN:-nette}
-    depends_on:
-      cc-db:
-        condition: service_healthy
     restart: ${RESTART_POLICY:-unless-stopped}
     networks:
       - claude-network
