@@ -79,6 +79,9 @@ const DEFAULT_CONFIG: ProxyConfig = {
     ),
     enabled: process.env.CLAUDE_SUBSCRIPTION_ENABLED !== "false",
     oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN || "",
+    refreshUrl: process.env.CLAUDE_OAUTH_REFRESH_URL || "https://console.anthropic.com/v1/oauth/token",
+    clientId: process.env.CLAUDE_OAUTH_CLIENT_ID || "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+    refreshSkewMs: parseInt(process.env.CLAUDE_OAUTH_REFRESH_SKEW_MS || "300000", 10), // refresh when <5min to expiry
   },
   modelFallbackMap: {
     // Anthropic Claude models (use directly)
@@ -239,6 +242,9 @@ export class ClaudeCodeProxy {
   private providerHealth: ProviderHealth;
   private requestCounter = 0;
   private subscriptionCooldownUntil = 0;
+  // Single-flight guard: concurrent requests await the same in-flight token refresh
+  // instead of each redeeming the refresh token (which rotates on every use).
+  private oauthRefreshInFlight: Promise<string | undefined> | null = null;
 
   constructor(config: Partial<ProxyConfig> = {}) {
     this.config = this.mergeConfig(config);
@@ -333,6 +339,37 @@ export class ClaudeCodeProxy {
     return `${providerName} ▸ ${modelDisplay} ▸ ${status}`;
   }
 
+  private readClaudeCredentialsFile(retries = 3): {
+    raw: Record<string, unknown>;
+    accessToken?: string;
+    refreshToken?: string;
+    expiresAt?: number;
+  } | undefined {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const text = fs.readFileSync(this.config.claudeSubscription.credentialsPath, "utf-8");
+        const raw = JSON.parse(text) as Record<string, unknown>;
+        const oauth = (raw?.claudeAiOauth ?? {}) as Record<string, unknown>;
+        return {
+          raw,
+          accessToken: oauth.accessToken as string | undefined,
+          refreshToken: oauth.refreshToken as string | undefined,
+          expiresAt: oauth.expiresAt as number | undefined,
+        };
+      } catch (err) {
+        // JSON parse failure = file mid-write race; wait 50ms and retry
+        if (err instanceof SyntaxError && attempt < retries) {
+          // Busy-wait briefly without async to keep the read path simple
+          const until = Date.now() + 50;
+          while (Date.now() < until) { /* spin */ }
+          continue;
+        }
+        return undefined;
+      }
+    }
+    return undefined;
+  }
+
   private async readClaudeOAuthToken(retries = 3): Promise<string | undefined> {
     // A static long-lived token (`claude setup-token`) takes precedence over the
     // credentials file. It has no readable expiry, so treat it as always-valid;
@@ -340,25 +377,164 @@ export class ClaudeCodeProxy {
     const staticToken = this.config.claudeSubscription.oauthToken;
     if (staticToken) return staticToken;
 
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      try {
-        const raw = fs.readFileSync(this.config.claudeSubscription.credentialsPath, "utf-8");
-        const creds = JSON.parse(raw);
-        const token = creds?.claudeAiOauth?.accessToken as string | undefined;
-        const expiresAt = creds?.claudeAiOauth?.expiresAt as number | undefined;
-        if (expiresAt && Date.now() > expiresAt) {
-          this.logger.warn("Claude subscription OAuth token has expired");
-          return undefined;
-        }
-        return token;
-      } catch (err) {
-        // JSON parse failure = file mid-write race; wait 50ms and retry
-        if (err instanceof SyntaxError && attempt < retries) {
-          await new Promise(r => setTimeout(r, 50));
-          continue;
-        }
+    const creds = this.readClaudeCredentialsFile(retries);
+    if (!creds) return undefined;
+
+    const { accessToken, refreshToken, expiresAt } = creds;
+    const skewMs = this.config.claudeSubscription.refreshSkewMs ?? 300000;
+
+    // Proactively refresh when the token is expired or within the skew window,
+    // provided we have a refresh token to redeem.
+    if (expiresAt && Date.now() > expiresAt - skewMs) {
+      if (refreshToken) {
+        const expired = Date.now() > expiresAt;
+        this.logger.warn(
+          `Claude subscription OAuth token ${expired ? "has expired" : "near expiry"} — refreshing`
+        );
+        const refreshed = await this.refreshClaudeOAuthToken(refreshToken);
+        if (refreshed) return refreshed;
+        // Refresh failed: if still within validity, the current token may work; else give up.
+        if (expired) return undefined;
+        return accessToken;
+      }
+      if (Date.now() > expiresAt) {
+        this.logger.warn("Claude subscription OAuth token has expired (no refresh token available)");
         return undefined;
       }
+    }
+
+    return accessToken;
+  }
+
+  /**
+   * Force an OAuth refresh regardless of the cached token's expiry. Used at the
+   * 401 boundary, where the access token may have been revoked server-side while
+   * still appearing valid locally. A static token cannot be refreshed.
+   */
+  private async forceRefreshClaudeOAuthToken(): Promise<string | undefined> {
+    if (this.config.claudeSubscription.oauthToken) return undefined;
+    const creds = this.readClaudeCredentialsFile();
+    if (!creds?.refreshToken) {
+      this.logger.warn("Claude subscription 401 — no refresh token available to recover");
+      return undefined;
+    }
+    return this.refreshClaudeOAuthToken(creds.refreshToken);
+  }
+
+  /**
+   * Redeem the OAuth refresh token for a fresh access token and persist the
+   * rotated credentials back to the credentials file. Anthropic rotates the
+   * refresh token on every use, so all returned fields must be written back or
+   * the next refresh will fail. A single-flight mutex ensures concurrent callers
+   * share one refresh rather than racing (and invalidating each other's tokens).
+   */
+  private async refreshClaudeOAuthToken(refreshToken: string): Promise<string | undefined> {
+    if (this.oauthRefreshInFlight) return this.oauthRefreshInFlight;
+
+    this.oauthRefreshInFlight = (async () => {
+      const refreshUrl = this.config.claudeSubscription.refreshUrl
+        || "https://console.anthropic.com/v1/oauth/token";
+      const clientId = this.config.claudeSubscription.clientId
+        || "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+
+      try {
+        const body = JSON.stringify({
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+          client_id: clientId,
+        });
+        const res = await this.httpRequest(
+          refreshUrl,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "accept": "application/json",
+              "content-length": Buffer.byteLength(body).toString(),
+            },
+            body,
+          },
+          15000, // 15s — keep refresh snappy so it doesn't stall a request
+          0      // no internal retries; a failed refresh falls through to next provider
+        );
+
+        if (res.status < 200 || res.status >= 300) {
+          this.logger.error(
+            `Claude OAuth refresh failed: HTTP ${res.status} ${res.body.toString().slice(0, 200)}`
+          );
+          return undefined;
+        }
+
+        const data = JSON.parse(res.body.toString()) as {
+          access_token?: string;
+          refresh_token?: string;
+          expires_in?: number;
+        };
+        if (!data.access_token) {
+          this.logger.error("Claude OAuth refresh response missing access_token");
+          return undefined;
+        }
+
+        const newExpiresAt = Date.now() + (data.expires_in ? data.expires_in * 1000 : 8 * 3600 * 1000);
+        this.persistClaudeCredentials({
+          accessToken: data.access_token,
+          // Anthropic rotates the refresh token; fall back to the old one if absent.
+          refreshToken: data.refresh_token || refreshToken,
+          expiresAt: newExpiresAt,
+        });
+
+        this.logger.ok(
+          `Claude OAuth token refreshed (expires ${new Date(newExpiresAt).toISOString()})`
+        );
+        return data.access_token;
+      } catch (err) {
+        this.logger.error(
+          `Claude OAuth refresh error: ${err instanceof Error ? err.message : "Unknown"}`
+        );
+        return undefined;
+      }
+    })();
+
+    try {
+      return await this.oauthRefreshInFlight;
+    } finally {
+      this.oauthRefreshInFlight = null;
+    }
+  }
+
+  /**
+   * Merge rotated OAuth fields into the credentials file and write it back
+   * atomically (temp file + rename) with 0600 perms, preserving any other keys
+   * already present (e.g. mcpOAuth).
+   */
+  private persistClaudeCredentials(next: {
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: number;
+  }): void {
+    const credPath = this.config.claudeSubscription.credentialsPath;
+    try {
+      let raw: Record<string, unknown> = {};
+      const existing = this.readClaudeCredentialsFile();
+      if (existing) raw = existing.raw;
+
+      const prevOauth = (raw.claudeAiOauth ?? {}) as Record<string, unknown>;
+      raw.claudeAiOauth = {
+        ...prevOauth,
+        accessToken: next.accessToken,
+        refreshToken: next.refreshToken,
+        expiresAt: next.expiresAt,
+      };
+
+      const tmpPath = `${credPath}.tmp-${process.pid}`;
+      fs.writeFileSync(tmpPath, JSON.stringify(raw), { mode: 0o600 });
+      fs.renameSync(tmpPath, credPath);
+    } catch (err) {
+      // A write failure is non-fatal: the refreshed token is still returned and
+      // used for this request; it just won't be cached for the next one.
+      this.logger.warn(
+        `Could not persist refreshed Claude credentials to ${credPath}: ${err instanceof Error ? err.message : "Unknown"}`
+      );
     }
   }
 
@@ -393,8 +569,8 @@ export class ClaudeCodeProxy {
       let subRes = await tryRequest(oauthToken);
 
       if (subRes.status === 401) {
-        this.logger.warn("← Claude subscription 401 — re-reading credentials and retrying");
-        const freshToken = await this.readClaudeOAuthToken();
+        this.logger.warn("← Claude subscription 401 — refreshing credentials and retrying");
+        const freshToken = await this.forceRefreshClaudeOAuthToken();
         if (freshToken && freshToken !== oauthToken) subRes = await tryRequest(freshToken);
       }
 
@@ -557,12 +733,17 @@ export class ClaudeCodeProxy {
     }
 
     const openRouterModels: Record<string, string> = {
+      // Opus → Opus (never silently downgrade the model class to Sonnet)
+      "claude-opus-4-8": "~anthropic/claude-opus-latest",
+      "claude-opus-4-7": "~anthropic/claude-opus-latest",
+      "claude-opus-4-6": "~anthropic/claude-opus-latest",
+      "claude-opus": "~anthropic/claude-opus-latest",
+      // Sonnet → Sonnet
       "claude-sonnet-4-6": "~anthropic/claude-sonnet-latest",
-      "claude-opus-4-6": "~anthropic/claude-sonnet-latest",
-      "claude-haiku-4-5-20251001": "~anthropic/claude-haiku-latest",
       "claude-sonnet-4-5": "~anthropic/claude-sonnet-latest",
-      "claude-opus": "~anthropic/claude-sonnet-latest",
       "claude-sonnet": "~anthropic/claude-sonnet-latest",
+      // Haiku → Haiku
+      "claude-haiku-4-5-20251001": "~anthropic/claude-haiku-latest",
       "claude-haiku": "~anthropic/claude-haiku-latest",
       "openrouter-free":
         this.config.modelFallbackMap["openrouter-free"] ||
@@ -1112,7 +1293,17 @@ export class ClaudeCodeProxy {
     if (!Array.isArray(messages)) return messages;
 
     let removedThinkingBlocks = 0;
-    const shouldStripMessageThinking = provider === "subscription";
+    // Subscription replays full conversation history to Anthropic. Anthropic validates
+    // `thinking` blocks by their cryptographic `signature`; blocks produced by a different
+    // provider (GLM/Z.AI fallback) have no valid signature and 400 on replay. But blocks
+    // Anthropic itself produced ARE signed, and preserving them keeps reasoning continuity
+    // across turns (interleaved/adaptive thinking) — exactly what direct Claude does.
+    //   unsigned (default): drop only thinking blocks without a signature (contaminated)
+    //   all:                drop every thinking/redacted_thinking block (legacy behavior)
+    //   none:               keep everything
+    const stripMode = provider === "subscription"
+      ? (process.env.STRIP_SUBSCRIPTION_THINKING || "unsigned")
+      : "none";
 
     const cleanedMessages = messages
       .map((message) => {
@@ -1121,16 +1312,30 @@ export class ClaudeCodeProxy {
         const cleanedMessage = { ...(message as Record<string, unknown>) };
         const content = cleanedMessage.content;
 
-        if (shouldStripMessageThinking && Array.isArray(content)) {
+        if (stripMode !== "none" && Array.isArray(content)) {
           const filteredContent = content.filter((block) => {
             if (!block || typeof block !== "object" || Array.isArray(block)) return true;
 
-            const type = (block as Record<string, unknown>).type;
-            if (type === "thinking" || type === "redacted_thinking") {
-              removedThinkingBlocks++;
-              return false;
+            const rec = block as Record<string, unknown>;
+            const type = rec.type;
+
+            if (stripMode === "all") {
+              if (type === "thinking" || type === "redacted_thinking") {
+                removedThinkingBlocks++;
+                return false;
+              }
+              return true;
             }
 
+            // stripMode === "unsigned": keep redacted_thinking (carries `data`) and any
+            // signed thinking block; drop only thinking blocks missing a signature.
+            if (type === "thinking") {
+              const sig = rec.signature;
+              if (typeof sig !== "string" || sig.length === 0) {
+                removedThinkingBlocks++;
+                return false;
+              }
+            }
             return true;
           });
 
@@ -1146,10 +1351,91 @@ export class ClaudeCodeProxy {
       .filter(Boolean);
 
     if (removedThinkingBlocks > 0) {
-      this.logger.debug(`  stripped ${removedThinkingBlocks} historical thinking block(s) for ${provider}`);
+      this.logger.debug(
+        `  stripped ${removedThinkingBlocks} ${stripMode === "all" ? "" : "unsigned "}thinking block(s) for ${provider} (mode=${stripMode})`
+      );
+    }
+
+    // Anthropic strictly validates tool-use block IDs against fixed patterns
+    // (server_tool_use → ^srvtoolu_…, tool_use → ^toolu_…). A fallback provider
+    // (e.g. GLM via Z.AI) can leave behind IDs in its own format; replaying that
+    // history to Anthropic/subscription 400s. Rewrite non-conforming IDs to a
+    // conforming shape, remapping paired tool_use_id references in the same pass.
+    if (provider === "anthropic" || provider === "subscription") {
+      return this.sanitizeToolUseIds(cleanedMessages as unknown[], provider);
     }
 
     return cleanedMessages;
+  }
+
+  /**
+   * Rewrite tool-use block IDs that don't match Anthropic's required patterns,
+   * keeping each rewritten ID consistent with the tool_result/tool_use_id blocks
+   * that reference it. Returns the messages array (with shallow copies of any
+   * block actually changed); the input is left untouched.
+   */
+  private sanitizeToolUseIds(messages: unknown[], provider: string): unknown[] {
+    const SERVER_RE = /^srvtoolu_[a-zA-Z0-9_]+$/;
+    const CLIENT_RE = /^toolu_[a-zA-Z0-9_]+$/;
+    const idMap = new Map<string, string>();
+    const usedTargets = new Set<string>();
+
+    const conform = (id: string, prefix: string): string => {
+      let candidate = `${prefix}${id.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+      // Guard against two distinct source IDs collapsing to the same target.
+      while (usedTargets.has(candidate)) candidate += "_";
+      usedTargets.add(candidate);
+      return candidate;
+    };
+
+    // Pass 1: discover non-conforming server_tool_use / tool_use IDs.
+    for (const message of messages) {
+      const content = (message as Record<string, unknown> | null)?.content;
+      if (!Array.isArray(content)) continue;
+      for (const block of content) {
+        if (!block || typeof block !== "object") continue;
+        const { type, id } = block as Record<string, unknown>;
+        if (typeof id !== "string") continue;
+        if (type === "server_tool_use" && !SERVER_RE.test(id)) {
+          if (!idMap.has(id)) idMap.set(id, conform(id, "srvtoolu_"));
+        } else if (type === "tool_use" && !CLIENT_RE.test(id)) {
+          if (!idMap.has(id)) idMap.set(id, conform(id, "toolu_"));
+        }
+      }
+    }
+
+    if (idMap.size === 0) return messages;
+
+    // Pass 2: apply the remap to both the defining IDs and any references.
+    let rewrites = 0;
+    const result = messages.map((message) => {
+      const content = (message as Record<string, unknown> | null)?.content;
+      if (!Array.isArray(content)) return message;
+
+      let blockChanged = false;
+      const newContent = content.map((block) => {
+        if (!block || typeof block !== "object") return block;
+        const rec = block as Record<string, unknown>;
+        const newId = typeof rec.id === "string" ? idMap.get(rec.id) : undefined;
+        const newRef = typeof rec.tool_use_id === "string" ? idMap.get(rec.tool_use_id) : undefined;
+        if (!newId && !newRef) return block;
+
+        blockChanged = true;
+        rewrites++;
+        const copy = { ...rec };
+        if (newId) copy.id = newId;
+        if (newRef) copy.tool_use_id = newRef;
+        return copy;
+      });
+
+      if (!blockChanged) return message;
+      return { ...(message as Record<string, unknown>), content: newContent };
+    });
+
+    this.logger.debug(
+      `  sanitized ${idMap.size} non-conforming tool-use ID(s), ${rewrites} block reference(s) for ${provider}`
+    );
+    return result;
   }
 
   private cleanBody(
@@ -1158,15 +1444,33 @@ export class ClaudeCodeProxy {
   ): string {
     try {
       const body = JSON.parse(bodyStr);
-      const allowedFields = [
-        "model", "messages", "max_tokens", "stop_sequences", "stream",
-        "system", "temperature", "top_p", "top_k", "metadata", "tools", "tool_choice",
-        "thinking"
-      ];
 
-      const cleaned: Record<string, unknown> = {};
-      for (const field of allowedFields) {
-        if (body[field] !== undefined) cleaned[field] = body[field];
+      // Anthropic-compatible providers (subscription + direct Anthropic) accept the
+      // client's native request shape. Pass top-level fields through untouched so
+      // coding-critical settings the client sends — output_config (effort, task_budget,
+      // format), context_management, and any future fields — reach the upstream exactly
+      // as Claude Code intended. We still remap the model and sanitize/clean messages.
+      const isAnthropicCompatible = provider === "anthropic" || provider === "subscription";
+
+      let cleaned: Record<string, unknown>;
+      if (isAnthropicCompatible) {
+        cleaned = { ...body };
+      } else {
+        // Z.AI / OpenRouter need a narrow, translated shape — keep the strict allow-list.
+        const allowedFields = [
+          "model", "messages", "max_tokens", "stop_sequences", "stream",
+          "system", "temperature", "top_p", "top_k", "metadata", "tools", "tool_choice",
+          "thinking"
+        ];
+        cleaned = {};
+        for (const field of allowedFields) {
+          if (body[field] !== undefined) cleaned[field] = body[field];
+        }
+
+        const stripped = Object.keys(body).filter(k => !allowedFields.includes(k));
+        if (stripped.length > 0) {
+          this.logger.debug(`  stripped fields: ${stripped.join(", ")}`);
+        }
       }
 
       if (cleaned.messages !== undefined) {
@@ -1181,12 +1485,6 @@ export class ClaudeCodeProxy {
         if (original !== cleaned.model) {
           this.logger.debug(`  model remap (${provider}): ${original} → ${cleaned.model}`);
         }
-      }
-
-      // Log stripped fields
-      const stripped = Object.keys(body).filter(k => !allowedFields.includes(k));
-      if (stripped.length > 0) {
-        this.logger.debug(`  stripped fields: ${stripped.join(", ")}`);
       }
 
       return JSON.stringify(cleaned);
@@ -1697,9 +1995,9 @@ export class ClaudeCodeProxy {
           let subRes = await trySubscriptionStream(oauthToken);
 
           if (subRes.statusCode === 401) {
-            this.logger.warn("← Claude subscription 401 — re-reading credentials and retrying");
+            this.logger.warn("← Claude subscription 401 — refreshing credentials and retrying");
             await this.readIncomingBody(subRes);
-            const freshToken = await this.readClaudeOAuthToken();
+            const freshToken = await this.forceRefreshClaudeOAuthToken();
             if (freshToken && freshToken !== oauthToken) {
               subRes = await trySubscriptionStream(freshToken);
             } else {

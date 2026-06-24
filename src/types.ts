@@ -23,6 +23,9 @@ export interface ProxyConfig {
     credentialsPath: string;
     enabled: boolean;
     oauthToken?: string; // static long-lived token from `claude setup-token`
+    refreshUrl?: string;     // OAuth token endpoint used to redeem the refresh token
+    clientId?: string;       // Claude Code public OAuth client_id
+    refreshSkewMs?: number;  // refresh proactively when within this window of expiry
   };
   modelFallbackMap: Record<string, string>;
   fallbackOnCodes: number[];
