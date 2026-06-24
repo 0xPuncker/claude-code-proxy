@@ -31,19 +31,23 @@ FROM node:24-alpine AS production
 
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+# Copy package metadata
+COPY --from=builder /app/package.json ./package.json
 
-# Install production dependencies only
-RUN npm ci --only=production
+# Reuse the dependencies the builder already installed (npm ci installed `pg`
+# and the generated Prisma client). This avoids the flaky `npm ci --only=production`
+# reinstall that was dropping `pg` from the final image.
+COPY --from=builder /app/node_modules ./node_modules
 
 # Copy built files from builder
 COPY --from=builder /app/dist ./dist
 
-# Copy Prisma files and generated client
+# Copy Prisma files
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/prisma.config.ts ./
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+
+# Fail the build loudly if a runtime dependency is missing
+RUN node -e "require.resolve('pg'); console.log('dependency check: pg OK')"
 
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \
