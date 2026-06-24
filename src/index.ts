@@ -1561,32 +1561,37 @@ export class ClaudeCodeProxy {
    * Build request headers for a specific provider
    */
   private buildProviderHeaders(provider: 'anthropic' | 'zai' | 'openrouter', reqHeaders: Record<string, string>): Record<string, string> {
-    if (provider === 'zai') {
-      const headers: Record<string, string> = {
-        host: new URL(this.config.zai.baseUrl).host,
-        authorization: `Bearer ${this.config.zai.apiKey}`,
-      };
-      // Copy allowed headers
+    // Headers that must NOT be forwarded to a non-Anthropic upstream. Beyond the
+    // hop-by-hop/auth headers, Anthropic-specific routing headers — especially
+    // `x-api-key` — make OpenRouter route the request into a restricted data-policy
+    // path and return `404: No endpoints available matching your guardrail
+    // restrictions`. `content-length` is recomputed after cleanBody, so drop the
+    // client's value too.
+    const blockedForwardHeaders = [
+      "authorization", "transfer-encoding", "connection", "host", "content-length",
+      "x-api-key", "anthropic-version", "anthropic-beta", "anthropic-dangerous-direct-browser-access",
+    ];
+    const copyAllowed = (headers: Record<string, string>) => {
       for (const [key, value] of Object.entries(reqHeaders)) {
-        if (!["authorization", "transfer-encoding", "connection", "host"].includes(key)) {
+        if (!blockedForwardHeaders.includes(key.toLowerCase())) {
           headers[key] = value;
         }
       }
       return headers;
+    };
+
+    if (provider === 'zai') {
+      return copyAllowed({
+        host: new URL(this.config.zai.baseUrl).host,
+        authorization: `Bearer ${this.config.zai.apiKey}`,
+      });
     } else if (provider === 'openrouter') {
-      const headers: Record<string, string> = {
+      return copyAllowed({
         host: new URL(this.config.openrouter.baseUrl).host,
         authorization: `Bearer ${this.config.openrouter.apiKey}`,
         "HTTP-Referer": "https://claude.ai/code",
         "X-Title": "Claude Code",
-      };
-      // Copy allowed headers
-      for (const [key, value] of Object.entries(reqHeaders)) {
-        if (!["authorization", "transfer-encoding", "connection", "host"].includes(key)) {
-          headers[key] = value;
-        }
-      }
-      return headers;
+      });
     } else {
       // Anthropic headers
       return this.cleanHeaders(reqHeaders);
