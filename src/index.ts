@@ -945,6 +945,34 @@ export class ClaudeCodeProxy {
         runningTotal += msgTokens;
       }
 
+      // Repair the front boundary. The kept window is a contiguous suffix of
+      // the original messages, so every tool_use/tool_result pair *inside* it
+      // is intact — but the first kept message may be a `user` turn whose
+      // `tool_result` blocks reference a `tool_use` from an assistant message
+      // that was just truncated away. Anthropic rejects that with
+      // "messages.0.content.0: unexpected tool_use_id found in tool_result
+      // blocks". Drop leading messages until the window starts on a valid turn
+      // (a `user` message carrying no orphaned tool_result).
+      let trimmed = 0;
+      while (
+        truncatedMessages.length > 0 &&
+        !this.isValidLeadingMessage(truncatedMessages[0])
+      ) {
+        truncatedMessages.shift();
+        trimmed++;
+      }
+      if (trimmed > 0) {
+        this.logger.warn(`Context window: dropped ${trimmed} leading message(s) to avoid orphaned tool_result at the truncation boundary`);
+      }
+
+      // If front-repair emptied the window (no clean user turn fit within the
+      // budget), truncating would produce an invalid empty `messages` array.
+      // Leave the body untouched and let the upstream provider decide.
+      if (truncatedMessages.length === 0) {
+        this.logger.warn('Context window: no valid leading message fits within budget — skipping truncation');
+        return bodyStr;
+      }
+
       truncatedBody.messages = truncatedMessages;
       const truncated = JSON.stringify(truncatedBody);
 
@@ -954,6 +982,30 @@ export class ClaudeCodeProxy {
     } catch {
       return bodyStr;
     }
+  }
+
+  /**
+   * Whether a message can legally be the first entry in the `messages` array
+   * sent to Anthropic: it must be a `user` turn and must not carry a
+   * `tool_result` block (which would require a preceding assistant `tool_use`).
+   */
+  private isValidLeadingMessage(msg: unknown): boolean {
+    if (!msg || typeof msg !== 'object') return false;
+    if ((msg as Record<string, unknown>).role !== 'user') return false;
+    return !this.messageContainsToolResult(msg);
+  }
+
+  /** True if any content block of the message is a `tool_result`. */
+  private messageContainsToolResult(msg: unknown): boolean {
+    if (!msg || typeof msg !== 'object') return false;
+    const content = (msg as Record<string, unknown>).content;
+    if (!Array.isArray(content)) return false;
+    return content.some(
+      (block) =>
+        !!block &&
+        typeof block === 'object' &&
+        (block as Record<string, unknown>).type === 'tool_result'
+    );
   }
 
   /**

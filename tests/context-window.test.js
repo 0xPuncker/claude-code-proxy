@@ -126,6 +126,90 @@ describe('Context Window Management', () => {
     assert.deepStrictEqual(lastTruncated, lastOriginal);
   });
 
+  it('should not leave an orphaned tool_result as the first message after truncation', () => {
+    proxy = new ClaudeCodeProxy();
+    const truncateMessagesToFit = proxy.truncateMessagesToFit.bind(proxy);
+
+    // Simulate a Claude Code agentic conversation: alternating
+    // user → assistant(tool_use) → user(tool_result) → ... that overflows.
+    const filler = 'context filler text to grow the token count. '.repeat(8);
+    const messages = [];
+    for (let i = 0; i < 40; i++) {
+      messages.push({ role: 'user', content: `turn ${i} ${filler}` });
+      messages.push({
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: `toolu_${i}`, name: 'Read', input: {} }]
+      });
+      messages.push({
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: `toolu_${i}`, content: filler }]
+      });
+    }
+
+    const requestBody = JSON.stringify({
+      model: 'claude-opus-4-6',
+      messages,
+      max_tokens: 4096
+    });
+
+    const truncated = truncateMessagesToFit(requestBody, 6000, 0.5);
+    const truncatedBody = JSON.parse(truncated);
+
+    // Truncation must have occurred...
+    assert.ok(truncatedBody.messages.length > 0);
+    assert.ok(truncatedBody.messages.length < messages.length);
+
+    // ...and the first kept message must be a valid leading turn: a `user`
+    // message with no orphaned tool_result block (the exact 400 we hit).
+    const first = truncatedBody.messages[0];
+    assert.strictEqual(first.role, 'user');
+    const firstHasToolResult =
+      Array.isArray(first.content) &&
+      first.content.some((b) => b && b.type === 'tool_result');
+    assert.strictEqual(firstHasToolResult, false);
+  });
+
+  it('should keep tool_use/tool_result pairs intact within the kept window', () => {
+    proxy = new ClaudeCodeProxy();
+    const truncateMessagesToFit = proxy.truncateMessagesToFit.bind(proxy);
+
+    const filler = 'pair integrity filler. '.repeat(8);
+    const messages = [];
+    for (let i = 0; i < 30; i++) {
+      messages.push({ role: 'user', content: `turn ${i} ${filler}` });
+      messages.push({
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: `toolu_${i}`, name: 'Read', input: {} }]
+      });
+      messages.push({
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: `toolu_${i}`, content: filler }]
+      });
+    }
+
+    const truncated = truncateMessagesToFit(
+      JSON.stringify({ model: 'claude-opus-4-6', messages, max_tokens: 4096 }),
+      6000,
+      0.5
+    );
+    const kept = JSON.parse(truncated).messages;
+
+    // Every tool_result in the kept window has its matching tool_use earlier.
+    const seenToolUseIds = new Set();
+    for (const msg of kept) {
+      if (!Array.isArray(msg.content)) continue;
+      for (const block of msg.content) {
+        if (block?.type === 'tool_use') seenToolUseIds.add(block.id);
+        if (block?.type === 'tool_result') {
+          assert.ok(
+            seenToolUseIds.has(block.tool_use_id),
+            `orphaned tool_result ${block.tool_use_id} in kept window`
+          );
+        }
+      }
+    }
+  });
+
   it('should not truncate when within context window limit', () => {
     proxy = new ClaudeCodeProxy();
     const truncateMessagesToFit = proxy.truncateMessagesToFit.bind(proxy);
