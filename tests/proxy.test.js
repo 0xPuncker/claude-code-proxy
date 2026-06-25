@@ -557,10 +557,12 @@ describe("Claude Code Proxy provider request normalization", () => {
     const proxy = createProxy();
     let capturedUrl = "";
     let capturedBody = "";
+    let capturedHeaders = {};
 
     proxy.httpRequest = async (url, options) => {
       capturedUrl = url;
       capturedBody = String(options.body);
+      capturedHeaders = options.headers;
       return {
         status: 200,
         headers: options.headers,
@@ -577,7 +579,14 @@ describe("Claude Code Proxy provider request normalization", () => {
         metadata: { source: "test" },
         extra_field: "should-be-stripped",
       }),
-      { "content-type": "application/json" },
+      {
+        "content-type": "application/json",
+        // Claude Code always sends these Anthropic-specific headers; forwarding
+        // x-api-key to OpenRouter triggers a guardrail 404.
+        "x-api-key": "sk-ant-should-not-leak",
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "claude-code-20250219",
+      },
       "/v1/messages?beta=true",
       "POST",
     );
@@ -588,6 +597,14 @@ describe("Claude Code Proxy provider request normalization", () => {
     assert.equal(parsedBody.model, "~anthropic/claude-sonnet-latest");
     assert.equal(parsedBody.extra_field, undefined);
     assert.deepEqual(parsedBody.metadata, { source: "test" });
+
+    // Anthropic-specific headers must NOT reach OpenRouter (cause guardrail 404).
+    assert.equal(capturedHeaders["x-api-key"], undefined);
+    assert.equal(capturedHeaders["anthropic-version"], undefined);
+    assert.equal(capturedHeaders["anthropic-beta"], undefined);
+    // OpenRouter's own auth + attribution headers are present.
+    assert.equal(capturedHeaders.authorization, "Bearer openrouter-test-key");
+    assert.equal(capturedHeaders["HTTP-Referer"], "https://claude.ai/code");
   });
 
   it("normalizes OpenRouter message responses to strict Anthropic shape", async () => {
